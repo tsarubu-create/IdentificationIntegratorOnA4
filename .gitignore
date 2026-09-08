@@ -1,0 +1,54 @@
+# ---- 依存関係 / ビルド成果物 ----
+node_modules/
+dist/
+dist-electron/
+out/
+release/
+build/
+*.tsbuildinfo
+
+# ---- ログ / 一時ファイル ----
+logs/
+*.log
+npm-debug.log*
+.tmp/
+tmp/
+temp/
+.cache/
+
+# ---- 個人情報保護: スキャン画像・出力物は絶対にコミットしない ----
+# 本アプリはスキャンした身分証を扱う。実画像がリポジトリに混入することを
+# 構造的に防ぐため、画像拡張子は既定で全て除外する。
+# テストで使う合成画像はコードから生成し、成果物はコミットしない。
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.bmp
+*.webp
+*.heic
+*.pdf
+
+# 出力ルート配下（アプリの出力先）
+A4Integrate/
+**/A4Integrate/
+
+# テスト実行時に生成される一時ワークスペース
+tests/**/__fixtures__/
+tests/**/__output__/
+coverage/
+
+# ---- 例外: リポジトリに必要なUI用アセットのみ明示的に許可 ----
+!resources/icons/*.png
+!docs/images/*.png
+
+# ---- OS / エディタ ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/

@@ -52,3 +52,7 @@ $RECYCLE.BIN/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# 手動確認用スクリプトの出力
+sample-out/
+fixture-input/

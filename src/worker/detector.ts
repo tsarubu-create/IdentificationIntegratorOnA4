@@ -14,7 +14,7 @@
 
 import type { CandidateMetrics } from '@core/detect/scoring';
 import { evaluateCandidates } from '@core/detect/scoring';
-import { orderCorners, scaleQuad } from '@core/geometry/quad';
+import { orderCorners, polygonArea, scaleQuad } from '@core/geometry/quad';
 import type { DetectionStatus, Point, Quad } from '@shared/types';
 import type { RawImage } from '@worker/imageIo';
 import { type OpenCv, cvConstant, loadOpenCv, withMats } from '@worker/opencv';
@@ -31,8 +31,20 @@ export interface DetectionOutcome {
 /** 背景推定に使う外周リングの幅（画像の短辺に対する比）。 */
 const BORDER_RING_RATIO = 0.04;
 
-/** 色差の最小閾値。これを下回る差は紙の地色ムラとみなす。 */
-const MIN_DELTA_E_THRESHOLD = 12;
+/**
+ * 色差の最小閾値。
+ *
+ * 実機のフラットベッドスキャン（300dpi）で背景の ΔE 分布を実測した結果、
+ * p50=1.3 / p90=3.1 / p99=5.2 だった。閾値 2〜3 では被覆率が 60% に達して
+ * 用紙全体を拾ってしまうため下限は必要だが、**4 で十分**である。
+ *
+ * 当初は 12 としていたが、これは実測の背景ノイズの 2 倍以上にあたる過大な値だった。
+ * 日本の身分証（運転免許証・マイナンバーカード）は券面がほぼ白く、白い
+ * スキャナ背景との色差が 12 に届かない。その結果、写真や文字など濃い部分だけが
+ * マスクに残り、**券面ではなく印刷部分の外接矩形**が検出されて見切れていた
+ * （実測: 矩形度 0.60、高さが実寸より 18.6% 不足）。
+ */
+const MIN_DELTA_E_THRESHOLD = 4;
 
 /**
  * 色差の最大閾値。
@@ -42,14 +54,41 @@ const MIN_DELTA_E_THRESHOLD = 12;
  */
 const MAX_DELTA_E_THRESHOLD = 35;
 
-/** 適応的閾値の係数（中央値 + k * MAD）。 */
-const MAD_MULTIPLIER = 3;
+/**
+ * MAD から標準偏差相当へ換算する係数（正規分布を仮定した標準的な値）。
+ *
+ * MAD は外れ値に強い代わりに分布の裾を過小評価する。実測では
+ * median + 3*MAD = 2.7 に対して背景の p99 は 5.2 であり、MAD をそのまま
+ * 使うと閾値が背景ノイズの裾を下回ってしまう。
+ */
+const MAD_TO_SIGMA = 1.4826;
+
+/**
+ * 閾値に用いるシグマの倍数。
+ *
+ * `median + 6*sigma` は実測で 5.6 となり、矩形度 0.98・寸法誤差 +2.6% という
+ * 最良の結果を与えた。パーセンタイルを直接使わないのは、カードが画像の端に
+ * 接して外周リングへ写り込んだときに裾が汚染されるため。中央値と MAD は
+ * 5 割までの混入に耐える。
+ */
+const SIGMA_MULTIPLIER = 6;
+
+/** 閾値統計で使うヒストグラムの分解能（1 単位あたりのバケット数）。 */
+const HISTOGRAM_RESOLUTION = 10;
+
+/** ヒストグラムのバケット数（ΔE 0〜255 を 0.1 刻みで表現する）。 */
+const HISTOGRAM_BUCKETS = 256 * HISTOGRAM_RESOLUTION;
 
 /** 端に接していると判定する許容画素数。 */
 const EDGE_TOUCH_TOLERANCE_PX = 2;
 
-/** 輪郭の近似精度（周長に対する比）。 */
-const APPROX_EPSILON_RATIO = 0.02;
+/**
+ * 輪郭の近似精度（周長に対する比）。
+ *
+ * 0.02 では原寸換算で 5mm 以上ずれうる。丸角を潰すには十分な粗さが要るが、
+ * 券面を削らない程度に抑える必要があるため 0.01 とした。
+ */
+const APPROX_EPSILON_RATIO = 0.01;
 
 /**
  * プロキシ画像からカードの四隅を検出する。
@@ -234,30 +273,50 @@ export function computeDeltaE(
  * 閾値が跳ね上がって何も検出できなくなる。外周は背景であるという前提のもとでは、
  * リングの中央値と MAD は「背景のばらつき」そのものであり、閾値が超えるべき量に等しい。
  *
+ * MAD をそのまま使わずシグマ換算するのは、MAD が分布の裾を過小評価するため
+ * （実測: median + 3*MAD = 2.7 に対し背景の p99 = 5.2）。
+ *
  * 上限を設けるのは、片側に影が落ちているなどでリングのばらつきが大きいとき、
  * 閾値が実在のカードとの色差を超えてしまうのを防ぐため。
  */
 export function adaptiveThreshold(deltaE: Float32Array, ringIndices: Uint32Array): number {
   if (ringIndices.length === 0) return MIN_DELTA_E_THRESHOLD;
 
-  const histogram = new Uint32Array(256);
-  for (const index of ringIndices) {
-    histogram[clampToByte(deltaE[index]!)]! += 1;
-  }
-  const median = medianFromHistogram(histogram, ringIndices.length);
+  const median = medianOf(deltaE, ringIndices, (value) => value);
+  const mad = medianOf(deltaE, ringIndices, (value) => Math.abs(value - median));
 
-  const deviations = new Uint32Array(256);
-  for (const index of ringIndices) {
-    deviations[Math.min(255, Math.abs(clampToByte(deltaE[index]!) - median))]! += 1;
-  }
-  const mad = medianFromHistogram(deviations, ringIndices.length);
-
-  const threshold = median + MAD_MULTIPLIER * mad;
+  const threshold = median + SIGMA_MULTIPLIER * MAD_TO_SIGMA * mad;
   return Math.min(MAX_DELTA_E_THRESHOLD, Math.max(MIN_DELTA_E_THRESHOLD, threshold));
 }
 
-function clampToByte(value: number): number {
-  return Math.min(255, Math.max(0, Math.round(value)));
+/**
+ * ヒストグラム法で中央値を求める（0.1 刻み）。
+ *
+ * **整数バケットでは分解能が足りない。** 実測の背景 ΔE は median 1.27 / MAD 0.49 で、
+ * 整数へ丸めると MAD が 0 か 1 に潰れ、閾値が 4 倍以上ぶれてしまう。
+ * 0.1 刻みなら実用上の誤差は無視できる。全画素をソートするより速く、メモリも一定。
+ */
+function medianOf(
+  values: Float32Array,
+  indices: Uint32Array,
+  transform: (value: number) => number,
+): number {
+  const histogram = new Uint32Array(HISTOGRAM_BUCKETS);
+  for (const index of indices) {
+    const bucket = Math.min(
+      HISTOGRAM_BUCKETS - 1,
+      Math.max(0, Math.round(transform(values[index]!) * HISTOGRAM_RESOLUTION)),
+    );
+    histogram[bucket]! += 1;
+  }
+
+  const target = indices.length / 2;
+  let cumulative = 0;
+  for (let bucket = 0; bucket < HISTOGRAM_BUCKETS; bucket += 1) {
+    cumulative += histogram[bucket]!;
+    if (cumulative >= target) return bucket / HISTOGRAM_RESOLUTION;
+  }
+  return (HISTOGRAM_BUCKETS - 1) / HISTOGRAM_RESOLUTION;
 }
 
 /** 閾値を超えた画素を 255 とする 2 値マスクを作る。 */
@@ -334,14 +393,29 @@ function describeContour(
 /**
  * 四隅を決める。
  *
- * まず輪郭の多角形近似を試し、4 点に落ちればそれを使う（台形歪みを保持できる）。
- * 4 点にならなければ最小外接矩形の頂点へフォールバックする。
+ * 候補は 2 つある。
+ *
+ * - **最小外接矩形**: 回転した長方形を厳密に表す。傾きには正確だが、
+ *   遠近による台形歪みは表現できない。
+ * - **多角形近似 (approxPolyDP)**: 台形歪みを保持できるが、
+ *   **実在の身分証は必ず角が丸い**ため、丸角を内側に切り込んで券面を削りやすい。
+ *
+ * どちらが正しいかは形状によって変わるので、**輪郭の面積をより忠実に説明できるほう**を
+ * 選ぶ。台形歪みがあれば近似四角形のほうが面積差が小さくなり、単に傾いただけの
+ * 長方形なら外接矩形のほうが小さくなる。
+ *
+ * 実測（フラットベッドの実スキャン）では、近似四角形が高さを 2.7mm 削っていたのに対し
+ * 外接矩形は誤差 0.2mm に収まり、この規則で正しく外接矩形が選ばれる。
  */
 function resolveCorners(
   cv: OpenCv,
   contour: InstanceType<OpenCv['Mat']>,
   rotatedRect: ReturnType<OpenCv['minAreaRect']>,
 ): Point[] {
+  const contourArea = cv.contourArea(contour);
+  const rectCorners = rotatedRectCorners(rotatedRect);
+  const rectError = Math.abs(polygonArea(rectCorners) - contourArea);
+
   const approx = new cv.Mat();
   try {
     const perimeter = cv.arcLength(contour, true);
@@ -353,13 +427,13 @@ function resolveCorners(
       for (let i = 0; i < 4; i += 1) {
         points.push({ x: data[i * 2]!, y: data[i * 2 + 1]! });
       }
-      return points;
+      if (Math.abs(polygonArea(points) - contourArea) < rectError) return points;
     }
   } finally {
     approx.delete();
   }
 
-  return rotatedRectCorners(rotatedRect);
+  return rectCorners;
 }
 
 /**

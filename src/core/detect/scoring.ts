@@ -86,19 +86,31 @@ export function aspectScore(aspectRatio: number): number {
   return clamp01(1 - distance / maxDistance);
 }
 
+/** 面積比の最良帯の下限。 */
+const IDEAL_AREA_RATIO_MIN = 0.03;
+
+/** 面積比の最良帯の上限。 */
+const IDEAL_AREA_RATIO_MAX = 0.6;
+
 /**
  * 面積の適合度。
  *
  * 小さすぎる候補（ノイズ）と大きすぎる候補（背景全体）の双方を下げる。
- * 面積比 0.1〜0.6 を最良帯とする。実スキャンではカードが画面の 1〜6 割を占めることが多い。
+ *
+ * 最良帯の下限を 0.03 としているのは、**A4 のフラットベッドにカードを 1 枚置いて
+ * 読むのが最も普通の使い方**だからである。ID-1 カード（85.6 x 54mm = 46cm2）を
+ * A4 面（623cm2）で読むと面積比は約 7% にしかならず、下限を 0.1 に置くと
+ * この基本的なケースが減点されてしまう（実測でも 4.7〜7.2% だった）。
  */
 export function areaScore(metrics: CandidateMetrics): number {
   if (metrics.imageArea <= 0) return 0;
   const ratio = metrics.contourArea / metrics.imageArea;
   if (ratio < MIN_AREA_RATIO || ratio > MAX_AREA_RATIO) return 0;
-  if (ratio >= 0.1 && ratio <= 0.6) return 1;
-  if (ratio < 0.1) return clamp01((ratio - MIN_AREA_RATIO) / (0.1 - MIN_AREA_RATIO));
-  return clamp01((MAX_AREA_RATIO - ratio) / (MAX_AREA_RATIO - 0.6));
+  if (ratio >= IDEAL_AREA_RATIO_MIN && ratio <= IDEAL_AREA_RATIO_MAX) return 1;
+  if (ratio < IDEAL_AREA_RATIO_MIN) {
+    return clamp01((ratio - MIN_AREA_RATIO) / (IDEAL_AREA_RATIO_MIN - MIN_AREA_RATIO));
+  }
+  return clamp01((MAX_AREA_RATIO - ratio) / (MAX_AREA_RATIO - IDEAL_AREA_RATIO_MAX));
 }
 
 /**

@@ -130,6 +130,49 @@ describe('カード検出（仕様書 §5）', () => {
     }
   });
 
+  it('左右 25 度までの傾きを検出できる（実運用の要件）', async () => {
+    // スキャン時の身分証は完全な垂直状態ではなく、左右 25 度までの傾きが予期される。
+    // 最小外接矩形は回転を厳密に表せるため、角度によらず実寸が復元できるはず。
+    for (const angle of [-25, -18, -10, -5, 5, 10, 18, 25]) {
+      const filePath = await writeFixture(
+        `tilt_${angle}.png`,
+        await syntheticScan({
+          canvasWidth: 1600,
+          canvasHeight: 1200,
+          cardWidth: 700,
+          cardHeight: 442,
+          rotationDeg: angle,
+        }),
+      );
+      const result = await detect(filePath);
+
+      expect(result.status, `傾き ${angle} 度で検出に失敗しました`).not.toBe('failed');
+      expect(result.quad, `傾き ${angle} 度で四隅が得られませんでした`).not.toBeNull();
+
+      // 傾きがあっても実寸が復元される（見切れ・過剰包含がない）。
+      const size = warpTargetSize(result.quad!);
+      expect(size.width, `傾き ${angle} 度の幅`).toBeGreaterThan(700 * 0.95);
+      expect(size.width, `傾き ${angle} 度の幅`).toBeLessThan(700 * 1.06);
+      expect(size.height, `傾き ${angle} 度の高さ`).toBeGreaterThan(442 * 0.95);
+      expect(size.height, `傾き ${angle} 度の高さ`).toBeLessThan(442 * 1.06);
+    }
+  });
+
+  it('傾いたカードの四隅が実際に回転している（軸平行な矩形で代用していない）', async () => {
+    const filePath = await writeFixture(
+      'tilt_check.png',
+      await syntheticScan({ canvasWidth: 1600, canvasHeight: 1200, rotationDeg: 20 }),
+    );
+    const quad = (await detect(filePath)).quad!;
+
+    // 20 度傾いていれば、上辺の 2 点の y 差は無視できない大きさになる。
+    const topRise = Math.abs(quad.topLeft.y - quad.topRight.y);
+    const topRun = Math.abs(quad.topLeft.x - quad.topRight.x);
+    const measuredDeg = (Math.atan2(topRise, topRun) * 180) / Math.PI;
+    expect(measuredDeg).toBeGreaterThan(15);
+    expect(measuredDeg).toBeLessThan(25);
+  });
+
   it('カードが無い画像は検出失敗になる', async () => {
     const filePath = await writeFixture('blank.png', await syntheticBlank());
     const result = await detect(filePath);

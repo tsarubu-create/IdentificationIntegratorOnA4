@@ -110,7 +110,7 @@ async function toItem(
     relativePath,
     filePath,
     quad: analysis.quad,
-    cardSizeMm: analysis.image.physicalSize!,
+    cardSizeMm: analysis.image.cardSizeMm!,
     kind,
     ignoreIcc: analysis.ignoreIcc,
     effectiveDpi: analysis.image.effectiveDpi,

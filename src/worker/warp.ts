@@ -60,7 +60,11 @@ export async function warpQuad(crop: RawImage, quadInCrop: Quad): Promise<RawIma
       transform,
       new cv.Size(target.width, target.height),
       cvConstant(cv.INTER_LINEAR, 'INTER_LINEAR'),
-      cvConstant(cv.BORDER_REPLICATE, 'BORDER_REPLICATE'),
+      // 切り出し枠が元画像からはみ出す場合は白で埋める。
+      // 配置枠と同じ大きさを切り出す方式では、券面が原稿の端に近いと
+      // 枠が画像外へ出ることがある。端の画素を引き伸ばす BORDER_REPLICATE では
+      // 縞状の伸びが出るため、白背景と同じ色で埋めるほうが自然に見える。
+      cvConstant(cv.BORDER_CONSTANT, 'BORDER_CONSTANT'),
       new cv.Scalar(255, 255, 255, 255),
     );
 

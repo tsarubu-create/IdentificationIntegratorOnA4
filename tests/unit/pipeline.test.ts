@@ -13,7 +13,7 @@ import { type ComposeItem, composePages } from '@worker/compose';
 import { readHeader } from '@worker/imageIo';
 import { ensureOutputDirectory, resolveStartSequence, writePageExclusive } from '@worker/output';
 import { scanImages } from '@core/scan/scanner';
-import { PAGE_SIZE_PX } from '@core/layout/a4';
+import { CELL_SIZE_MM, PAGE_SIZE_PX } from '@core/layout/a4';
 import { corruptImageBytes, syntheticBlank, syntheticScan } from '../fixtures/synthetic';
 
 let root: string;
@@ -66,7 +66,7 @@ async function toComposeItem(
     relativePath,
     filePath,
     quad: analysis.quad!,
-    cardSizeMm: analysis.image.physicalSize!,
+    cardSizeMm: analysis.image.cardSizeMm!,
     kind,
     ignoreIcc: analysis.ignoreIcc,
     effectiveDpi: analysis.image.effectiveDpi,
@@ -86,9 +86,9 @@ describe('解析フェーズ（仕様書 §5 / §6 / §8）', () => {
     // 券面サイズは規格値（ISO/IEC 7810 ID-1）へ揃えられる。
     expect(analysis.image.cardSizeMm!.widthMm).toBeCloseTo(85.6, 1);
     expect(analysis.image.cardSizeMm!.heightMm).toBeCloseTo(53.98, 1);
-    // 配置枠は見切れ防止の余白ぶんだけ大きい。
-    expect(analysis.image.physicalSize!.widthMm).toBeCloseTo(87.6, 1);
-    expect(analysis.image.physicalSize!.heightMm).toBeCloseTo(55.98, 1);
+    // 配置されるタイルはセルいっぱい（券面の縁ではなく枠で切り出すため）。
+    expect(analysis.image.physicalSize!.widthMm).toBeCloseTo(CELL_SIZE_MM.widthMm, 1);
+    expect(analysis.image.physicalSize!.heightMm).toBeCloseTo(CELL_SIZE_MM.heightMm, 1);
     expect(analysis.image.exclusion).toBeNull();
   });
 
@@ -106,7 +106,9 @@ describe('解析フェーズ（仕様書 §5 / §6 / §8）', () => {
     const analysis = await analyzeImage({ id: '1', filePath, relativePath: 'dpi600.png' });
 
     expect(analysis.image.effectiveDpi).toBe(600);
-    expect(analysis.image.physicalSize!.widthMm).toBeCloseTo(42.8, 0);
+    // 600dpi では券面が 42.8mm 相当となり規格値から大きく外れるため、実測のまま扱う。
+    expect(analysis.image.cardSizeMm!.widthMm).toBeCloseTo(42.8, 0);
+    expect(analysis.image.warnings).toContain('nonStandardSize');
   });
 
   it('サムネイルをメモリ上に持ち、ディスクへは書き出さない', async () => {
@@ -142,7 +144,7 @@ describe('解析フェーズ（仕様書 §5 / §6 / §8）', () => {
     const filePath = await putImage('big.png', await cardScanBytes({ density: 150 }));
     const analysis = await analyzeImage({ id: '1', filePath, relativePath: 'big.png' });
 
-    expect(analysis.image.physicalSize!.widthMm).toBeGreaterThan(95);
+    expect(analysis.image.cardSizeMm!.widthMm).toBeGreaterThan(95);
     expect(analysis.image.exclusion).toBe('doesNotFitCell');
   });
 });
@@ -332,7 +334,7 @@ describe('出力ファイルの生成（仕様書 §4 / §6 / §7）', () => {
       relativePath: 'big.png',
       filePath,
       quad: analysis.quad!,
-      cardSizeMm: analysis.image.physicalSize!,
+      cardSizeMm: analysis.image.cardSizeMm!,
       kind: 'idCard',
       ignoreIcc: false,
       effectiveDpi: analysis.image.effectiveDpi,

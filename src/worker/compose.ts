@@ -9,7 +9,7 @@
 import { PAGE_SIZE_PX } from '@core/layout/a4';
 import { type PageItem, paginate } from '@core/layout/pagination';
 import { boundingBox, translateQuad } from '@core/geometry/quad';
-import { officialCrop } from '@core/standards/officialCrop';
+import { cropQuad } from '@core/standards/officialCrop';
 import { resolvePlacement } from '@core/layout/placement';
 import { sortByRelativePath } from '@core/scan/naturalSort';
 import type { DocumentKind, ExclusionReason, Quad, SizeMm } from '@shared/types';
@@ -142,9 +142,11 @@ async function renderCard(
   item: ComposeItem,
   targetSize: { width: number; height: number },
 ): Promise<Buffer> {
-  // 利用者が選んだ種別の規格値で切り出し枠を確定する。規格値のほうが実測より
-  // 大きければ枠は外側へ広がるため、券面のきわを取り逃していても見切れない。
-  const quad = officialCrop(item.quad, item.kind, item.effectiveDpi).quad;
+  // 券面の縁ではなく**配置枠と同じ大きさ**を、検出した中心のまわりから切り出す。
+  // 必要な精度が縁ではなく中心だけになるため、許容誤差が桁で広がる
+  // （券面 85.6mm に対しセル 95.0mm なので中心が ±4.7mm ずれても収まる）。
+  const placement = resolvePlacement(item.cardSizeMm, item.kind);
+  const quad = cropQuad(item.quad, placement.cropSizeMm, item.effectiveDpi);
 
   const box = boundingBox(
     quad,

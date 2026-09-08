@@ -11,7 +11,9 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { detectCard } from '@worker/detector';
 import { createDetectionProxy } from '@worker/imageIo';
-import { officialCrop, CROP_BLEED_MM } from '@core/standards/officialCrop';
+import { cropQuad, resolveCardSize } from '@core/standards/officialCrop';
+import { resolvePlacement } from '@core/layout/placement';
+import { CARDS_PER_PAGE, CELL_SIZE_MM, CELL_SIZE_PX, cellRect } from '@core/layout/a4';
 import {
   ID1_CARD_SIZE_MM,
   PASSPORT_SPREAD_SIZE_MM,
@@ -59,16 +61,19 @@ async function whiteCardScan(
   return filePath;
 }
 
-/** 検出して規格値へ合わせた切り出し枠の、軸平行な範囲を返す。 */
+/** 検出し、実際に切り出す領域の軸平行な範囲を返す。 */
 async function cropBox(filePath: string) {
   const proxy = await createDetectionProxy(filePath);
   const result = await detectCard(proxy, proxy.scaleToOriginal);
   expect(result.quad, '検出に失敗しました').not.toBeNull();
 
-  const crop = officialCrop(result.quad!, 'idCard', 300);
-  const pts = quadToArray(crop.quad);
+  const card = resolveCardSize(result.quad!, 'idCard', 300);
+  const placement = resolvePlacement(card.sizeMm, 'idCard');
+  const quad = cropQuad(result.quad!, placement.cropSizeMm, 300);
+  const pts = quadToArray(quad);
   return {
-    crop,
+    card,
+    placement,
     x0: Math.min(...pts.map((p) => p.x)),
     x1: Math.max(...pts.map((p) => p.x)),
     y0: Math.min(...pts.map((p) => p.y)),
@@ -172,21 +177,94 @@ describe('同一カードの表裏で寸法が一致する', () => {
     const a = await cropBox(front);
     const b = await cropBox(back);
 
-    expect(a.crop.matched).toBe(true);
-    expect(b.crop.matched).toBe(true);
-    expect(a.crop.cardSizeMm).toEqual(b.crop.cardSizeMm);
-    expect(a.crop.sizeMm).toEqual(b.crop.sizeMm);
-    expect(a.crop.cardSizeMm).toEqual(ID1_CARD_SIZE_MM);
+    expect(a.card.matched).toBe(true);
+    expect(b.card.matched).toBe(true);
+    expect(a.card.sizeMm).toEqual(b.card.sizeMm);
+    expect(a.placement.sizeMm).toEqual(b.placement.sizeMm);
+    expect(a.card.sizeMm).toEqual(ID1_CARD_SIZE_MM);
   });
 });
 
-describe('余白（ブリード）', () => {
-  it('配置サイズは規格値に余白を加えたものになる', async () => {
-    const filePath = await whiteCardScan('bleed.png');
-    const { crop } = await cropBox(filePath);
+describe('タイルは配置枠いっぱいになる', () => {
+  it('券面は規格値、タイルはセルの大きさになる', async () => {
+    const filePath = await whiteCardScan('tile.png');
+    const { card, placement } = await cropBox(filePath);
 
-    expect(crop.cardSizeMm).toEqual(ID1_CARD_SIZE_MM);
-    expect(crop.sizeMm.widthMm).toBeCloseTo(ID1_CARD_SIZE_MM.widthMm + CROP_BLEED_MM * 2, 6);
-    expect(crop.sizeMm.heightMm).toBeCloseTo(ID1_CARD_SIZE_MM.heightMm + CROP_BLEED_MM * 2, 6);
+    // 券面の大きさは規格値から与える。
+    expect(card.sizeMm).toEqual(ID1_CARD_SIZE_MM);
+    // タイルはセルいっぱい。隣接タイルと接しても重ならない。
+    expect(placement.sizeMm).toEqual(CELL_SIZE_MM);
+  });
+
+  it('切り出し領域は券面より十分大きく、中心のずれを吸収できる', async () => {
+    const filePath = await whiteCardScan('slack.png');
+    const box = await cropBox(filePath);
+
+    const toMm = (px: number) => (px / 300) * 25.4;
+    const slackX = (toMm(box.x1 - box.x0) - ID1_CARD_SIZE_MM.widthMm) / 2;
+    const slackY = (toMm(box.y1 - box.y0) - ID1_CARD_SIZE_MM.heightMm) / 2;
+
+    // セル 95.0 x 69.3mm、券面 85.6 x 53.98mm -> 片側 4.7mm / 7.6mm の余裕
+    expect(slackX).toBeGreaterThan(4);
+    expect(slackY).toBeGreaterThan(7);
+  });
+});
+
+describe('中心がずれても券面が欠けない（タイル方式の要点）', () => {
+  it('中心の推定が 4mm ずれても券面は切り出し領域に完全に収まる', () => {
+    // 券面の縁ではなく配置枠いっぱいを切り出すため、必要な精度は中心だけになる。
+    // セル 95.0 x 69.3mm に対し券面 85.6 x 53.98mm なので、
+    // 片側 4.7mm / 7.6mm の余裕がある。
+    const dpi = 300;
+    const trueCenter = { x: 1275, y: 1753 };
+    const placement = resolvePlacement(ID1_CARD_SIZE_MM, 'idCard');
+
+    for (const shiftMm of [-4, -2, 0, 2, 4]) {
+      const shiftPx = (shiftMm / 25.4) * dpi;
+      // 中心がずれて検出された四隅を作る（大きさは券面相当）。
+      const half = { w: (85.6 / 25.4) * dpi * 0.5, h: (53.98 / 25.4) * dpi * 0.5 };
+      const cx = trueCenter.x + shiftPx;
+      const detected = {
+        topLeft: { x: cx - half.w, y: trueCenter.y - half.h },
+        topRight: { x: cx + half.w, y: trueCenter.y - half.h },
+        bottomRight: { x: cx + half.w, y: trueCenter.y + half.h },
+        bottomLeft: { x: cx - half.w, y: trueCenter.y + half.h },
+      };
+
+      const quad = cropQuad(detected, placement.cropSizeMm, dpi);
+      const pts = quadToArray(quad);
+      const x0 = Math.min(...pts.map((p) => p.x));
+      const x1 = Math.max(...pts.map((p) => p.x));
+
+      // 券面の真の範囲（ずれていない中心を基準）
+      const cardX0 = trueCenter.x - half.w;
+      const cardX1 = trueCenter.x + half.w;
+
+      expect(x0, `中心が ${shiftMm}mm ずれたとき左が欠けています`).toBeLessThanOrEqual(cardX0);
+      expect(x1, `中心が ${shiftMm}mm ずれたとき右が欠けています`).toBeGreaterThanOrEqual(cardX1);
+    }
+  });
+});
+
+describe('タイルは重ならない（仕様書 §7.1）', () => {
+  it('セル寸法のタイルは隣接しても重ならず、隙間なく並ぶ', () => {
+    const placement = resolvePlacement(ID1_CARD_SIZE_MM, 'idCard');
+    const rects = Array.from({ length: CARDS_PER_PAGE }, (_, index) => {
+      const cell = cellRect(index);
+      return { x: cell.x, y: cell.y, w: placement.sizePx.width, h: placement.sizePx.height };
+    });
+
+    for (let i = 0; i < rects.length; i += 1) {
+      for (let j = i + 1; j < rects.length; j += 1) {
+        const a = rects[i]!;
+        const b = rects[j]!;
+        const overlaps = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+        expect(overlaps, `タイル ${i} と ${j} が重なっています`).toBe(false);
+      }
+    }
+
+    // 隙間なく並ぶ（タイル幅がセル幅と一致する）
+    expect(placement.sizePx.width).toBe(CELL_SIZE_PX.width);
+    expect(placement.sizePx.height).toBe(CELL_SIZE_PX.height);
   });
 });

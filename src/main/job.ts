@@ -136,7 +136,7 @@ export function buildComposeItems(
     const result = state.results.get(relativePath);
     if (result === undefined) continue;
     if (result.quad === null) continue;
-    if (result.image.physicalSize === null) continue;
+    if (result.image.cardSizeMm === null) continue;
     // 上限超過・復号失敗など、種別に依らない除外はここで落とす。
     // セル超過（doesNotFitCell）は種別で変わるため compose 側で再判定する。
     if (result.image.exclusion !== null && result.image.exclusion !== 'doesNotFitCell') continue;
@@ -146,7 +146,7 @@ export function buildComposeItems(
       relativePath,
       filePath: path.join(state.inputFolder, relativePath),
       quad: result.quad,
-      cardSizeMm: result.image.physicalSize,
+      cardSizeMm: result.image.cardSizeMm,
       kind: kinds[relativePath] ?? 'idCard',
       ignoreIcc: result.ignoreIcc,
       effectiveDpi: result.image.effectiveDpi,

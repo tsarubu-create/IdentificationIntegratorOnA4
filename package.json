@@ -34,7 +34,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "^38.8.6",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^25.1.8",
     "electron-vite": "^5.0.0",
     "eslint": "^9.20.0",
     "eslint-plugin-react-hooks": "^5.1.0",
@@ -67,13 +67,18 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
-      ]
+      ],
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,

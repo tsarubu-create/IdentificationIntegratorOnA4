@@ -322,6 +322,27 @@ OpenCV WASM のヒープは上限 512 MB で初期化し、WASM へ渡す Mat �
 
 ## 6. 開発・テスト・Windows 配布の手順
 
+### 6.0 前提環境
+
+| 項目 | 要件 | 備考 |
+|------|------|------|
+| OS | Windows 10 / 11 (x64) | |
+| Node.js | **20.12 以上**（推奨 20.19 以上または 22 LTS） | 下記の注意を参照 |
+
+> **Node.js のバージョンに関する注意**
+> 検証環境の Node 20.12.0 では、いくつかの依存が `require(ESM)` を使えず動作しません
+> （`require(ESM)` は Node 20.19 / 22.12 以降で利用可能になりました）。そのため次の版を固定しています。
+>
+> | 依存 | 固定した版 | 理由 |
+> |------|-----------|------|
+> | Electron | **38**（44 ではなく） | 40 以降が依存する `@electron/get@5` が ESM 専用で、インストールが完了しない |
+> | electron-builder | **25**（26 ではなく） | 26 の `app-builder-lib` が ESM 専用の `@noble/hashes` を require する |
+> | Vitest | **3**（4 ではなく） | npm 10.5 の peer 解決が vitest 4 の依存グラフで異常終了する |
+> | TypeScript | **5.9**（7 ではなく） | typescript-eslint 8 が対応する系列 |
+>
+> **Node を 20.19 以上へ更新すれば、いずれも最新版へ引き上げられます。** 現状の固定は
+> 動作を優先した措置であり、機能上の制約はありません。
+
 ### 6.1 開発
 
 ```bash
@@ -344,8 +365,35 @@ npm run build
 npm run package
 ```
 
-生成物は `release/` に出力されます（NSIS インストーラ / portable zip）。
+生成物は `release/` に出力されます。
+
+| 成果物 | 内容 |
+|--------|------|
+| `IdentificationIntegratorOnA4 Setup <version>.exe` | NSIS インストーラ（インストール先を選択可能） |
+| `IdentificationIntegratorOnA4 <version>.exe` | portable 版（インストール不要） |
+| `release/win-unpacked/` | 展開済みのアプリ一式 |
+
+**検証済み**: パッケージ版を実際に起動し、合成画像 10 枚から A4 3 ページを生成できることを
+確認しました。`asarUnpack` の指定により、sharp のネイティブモジュールと libvips の DLL が
+asar の外へ展開されます。
+
+```
+release/win-unpacked/resources/app.asar.unpacked/node_modules/@img/sharp-win32-x64/lib/
+  ├── libvips-42.dll
+  ├── libvips-cpp-8.18.6.dll
+  └── sharp-win32-x64-0.35.4.node
+```
+
 未署名のため、初回起動時に SmartScreen 警告が出ます。
+
+> **`signAndEditExecutable: false` を指定している理由**
+> electron-builder は実行ファイルのメタデータ書き換え（rcedit）と署名のために
+> `winCodeSign` パッケージを取得しますが、その展開には macOS 用 `.dylib` の
+> シンボリックリンク作成が含まれます。Windows では開発者モードを有効にするか
+> 管理者権限で実行しないとシンボリックリンクを作成できず、展開に失敗します。
+> **本プロジェクトはコード署名を行わない**ため、この工程ごと省略しています。
+> 実行ファイルにアイコンやバージョン情報を埋め込みたい場合は、Windows の
+> 開発者モードを有効にしたうえで、この設定を `true` に戻してください。
 
 ### 6.4 テスト方針（仕様書 §10）
 
@@ -369,8 +417,23 @@ npm run package
 
 ---
 
-## 7. 未確定事項（実装中に確定し本書を更新）
+## 7. 実装で確定した事項
 
-1. Electron / sharp / opencv-js の具体バージョン固定（実装初回コミットで確定）
-2. 検出スコアの重みと閾値の最終値（合成画像テストの結果でチューニング）
-3. 設定の永続化先とファイル形式（`app.getPath('userData')/settings.json` を想定）
+設計提案の段階で未確定としていた項目は、次のとおり確定しました。
+
+1. **バージョン固定**: Electron 38 / sharp 0.35 / @techstark/opencv-js 4.12.0-release.1 /
+   TypeScript 5.9 / Vitest 3 / electron-builder 25（理由は §6.0）
+2. **検出の閾値**: 色差の閾値は外周リングの `median + 3 * MAD` を 12〜35 に丸めた値。
+   スコアの重みは 矩形度 0.40 / アスペクト比 0.25 / 面積 0.25 / 端接触 0.10。
+   面積比・アスペクト比・矩形度には足切りを設けています（§3.2）
+3. **設定の永続化**: `app.getPath('userData')/settings.json`。保存するのは
+   出力ルートと直近の入力フォルダのパスのみです
+
+### 実装中に判明し、設計を修正した点
+
+| 事象 | 影響 | 対応 |
+|------|------|------|
+| sharp は解像度情報の無い JPEG に対し JFIF 既定値の 72 を返す | 72dpi を実測値として採用すると ID-1 カードを 302x190mm と誤算出し、全件が「セルに収まらない」で除外される | DPI の有効下限を 50 から **100** へ引き上げ |
+| 閾値の統計を画像全体から取ると、カードが多数派の画像で中央値がカード側へ移る | 密着スキャンで閾値が 71 まで上昇し、検出不能（マスク被覆率 0.5%） | 統計を**外周リングのみ**から取得（§3.2） |
+| Emscripten のモジュールは `then` を持つ thenable | `await` すると永久に解決しない | 値として扱う前に `then` を削除 |
+| `metadata().width` は Exif 回転**前**の寸法 | 回転画像で座標が 90 度ずれる | `metadata().autoOrient` を寸法の正とする |

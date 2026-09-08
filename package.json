@@ -1,0 +1,85 @@
+{
+  "name": "identification-integrator-on-a4",
+  "version": "0.1.0",
+  "description": "スキャンした身分証画像を物理サイズを維持したままA4 PNGへ統合するローカル完結デスクトップアプリ",
+  "private": true,
+  "license": "MIT",
+  "author": "tsarubu-create",
+  "main": "./dist-electron/main/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npm run build && electron-builder --win nsis portable",
+    "verify": "npm run lint && npm run typecheck && npm run test"
+  },
+  "dependencies": {
+    "@techstark/opencv-js": "4.12.0-release.1",
+    "sharp": "^0.35.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "eslint": "^9.20.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "prettier": "^3.4.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.4"
+  },
+  "build": {
+    "appId": "io.github.tsarubu.identification-integrator-on-a4",
+    "productName": "IdentificationIntegratorOnA4",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/sharp/**",
+      "**/node_modules/@img/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "npmRebuild": false
+  }
+}

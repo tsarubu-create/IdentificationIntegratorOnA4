@@ -151,6 +151,29 @@ export function rawToPng(image: RawImage): Promise<Buffer> {
 }
 
 /**
+ * 生 RGB データを、指定した画素サイズの PNG へ変換する。
+ *
+ * ここでの拡大・縮小は「収まらないから縮める」ものではなく、**DPI の正規化**である。
+ * 切り出したカードは入力の DPI で表現されているため、300dpi の A4 上で同じ
+ * 物理サイズになるよう解像度を合わせる（仕様書 §6）。
+ */
+export function rawToSizedPng(image: RawImage, size: SizePx): Promise<Buffer> {
+  return sharp(image.data, {
+    raw: { width: image.width, height: image.height, channels: toChannels(image.channels) },
+  })
+    .resize({
+      width: size.width,
+      height: size.height,
+      // 幅・高さはどちらも同じ物理サイズから導出しており縦横比は一致する。
+      // 'fill' でも歪みは生じず、丸め誤差による 1px の隙間だけを吸収できる。
+      fit: 'fill',
+      kernel: 'lanczos3',
+    })
+    .png()
+    .toBuffer();
+}
+
+/**
  * 確認画面用のサムネイルを WebP で作る。
  *
  * **ディスクへは書き出さない**（仕様書 §11-5）。呼び出し側が `ArrayBuffer` として

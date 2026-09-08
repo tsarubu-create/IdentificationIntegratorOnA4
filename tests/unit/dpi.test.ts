@@ -28,6 +28,20 @@ describe('DPI の正規化（仕様書 §6）', () => {
     expect(normalizeDpi(MIN_VALID_DPI).isFallback).toBe(false);
     expect(normalizeDpi(MAX_VALID_DPI).isFallback).toBe(false);
   });
+
+  it('解像度情報が無い JPEG の 72dpi を実測値として採用しない', () => {
+    // sharp は JFIF の既定値 72 を返す。これを採用すると ID-1 カードを
+    // 302 x 190 mm と誤算出し、セルに収まらないとして除外してしまう。
+    const result = normalizeDpi(72);
+    expect(result.effectiveDpi).toBe(FALLBACK_DPI);
+    expect(result.isFallback).toBe(true);
+  });
+
+  it('実務上ありうるスキャン解像度は有効として扱う', () => {
+    for (const dpi of [150, 200, 300, 400, 600, 1200]) {
+      expect(normalizeDpi(dpi)).toEqual({ embeddedDpi: dpi, effectiveDpi: dpi, isFallback: false });
+    }
+  });
 });
 
 describe('物理サイズ換算', () => {

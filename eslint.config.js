@@ -114,6 +114,11 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
   },
   {
+    // 宣言ファイルでは `typeof import()` が型を隔離するための正当な手段になる。
+    files: ['**/*.d.ts'],
+    rules: { '@typescript-eslint/consistent-type-imports': 'off' },
+  },
+  {
     files: ['tests/**/*.ts', '*.config.ts'],
     rules: {
       '@typescript-eslint/no-unsafe-assignment': 'off',

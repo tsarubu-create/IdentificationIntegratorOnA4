@@ -32,8 +32,16 @@ export const THUMBNAIL_LONG_EDGE_PX = 240;
 /** OpenCV(WASM) へ渡す Mat の最大画素数。原寸全体を WASM へ渡さないための防壁。 */
 export const MAX_WASM_MAT_PX = 40_000_000;
 
-/** DPI として有効とみなす下限。これ未満は「情報なし」として扱う。 */
-export const MIN_VALID_DPI = 50;
+/**
+ * DPI として有効とみなす下限。これ未満は「情報なし」として扱う。
+ *
+ * 100 という値には根拠がある。sharp は **解像度情報を持たない JPEG に対して 72 を返す**
+ * （JFIF の既定値。PNG で pHYs が無い場合は undefined を返すのと対照的）。
+ * 72 を実測値として採用すると、ID-1 カードを 302 x 190 mm と誤って算出し、
+ * 「セルに収まらない」として除外してしまう。スキャナが 72dpi を出すことは実務上ないため、
+ * 100 未満は「情報なし」とみなして 300dpi へフォールバックする（仕様書 §6）。
+ */
+export const MIN_VALID_DPI = 100;
 
 /** DPI として有効とみなす上限。これを超える値は誤ったメタデータとみなす。 */
 export const MAX_VALID_DPI = 2400;

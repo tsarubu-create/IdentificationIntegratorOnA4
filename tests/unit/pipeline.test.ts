@@ -69,6 +69,7 @@ async function toComposeItem(
     cardSizeMm: analysis.image.physicalSize!,
     kind,
     ignoreIcc: analysis.ignoreIcc,
+    effectiveDpi: analysis.image.effectiveDpi,
     sourceWidth: header.width,
     sourceHeight: header.height,
   };
@@ -82,8 +83,12 @@ describe('解析フェーズ（仕様書 §5 / §6 / §8）', () => {
     expect(analysis.image.status).not.toBe('failed');
     expect(analysis.image.embeddedDpi).toBe(300);
     expect(analysis.image.effectiveDpi).toBe(300);
-    expect(analysis.image.physicalSize!.widthMm).toBeCloseTo(85.6, 0);
-    expect(analysis.image.physicalSize!.heightMm).toBeCloseTo(54.0, 0);
+    // 券面サイズは規格値（ISO/IEC 7810 ID-1）へ揃えられる。
+    expect(analysis.image.cardSizeMm!.widthMm).toBeCloseTo(85.6, 1);
+    expect(analysis.image.cardSizeMm!.heightMm).toBeCloseTo(53.98, 1);
+    // 配置枠は見切れ防止の余白ぶんだけ大きい。
+    expect(analysis.image.physicalSize!.widthMm).toBeCloseTo(87.6, 1);
+    expect(analysis.image.physicalSize!.heightMm).toBeCloseTo(55.98, 1);
     expect(analysis.image.exclusion).toBeNull();
   });
 
@@ -330,6 +335,7 @@ describe('出力ファイルの生成（仕様書 §4 / §6 / §7）', () => {
       cardSizeMm: analysis.image.physicalSize!,
       kind: 'idCard',
       ignoreIcc: false,
+      effectiveDpi: analysis.image.effectiveDpi,
       sourceWidth: header.width,
       sourceHeight: header.height,
     };

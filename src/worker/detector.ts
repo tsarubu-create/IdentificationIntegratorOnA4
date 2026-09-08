@@ -14,7 +14,7 @@
 
 import type { CandidateMetrics } from '@core/detect/scoring';
 import { evaluateCandidates } from '@core/detect/scoring';
-import { orderCorners, polygonArea, scaleQuad } from '@core/geometry/quad';
+import { orderCorners, polygonArea, quadToArray, scaleQuad } from '@core/geometry/quad';
 import type { DetectionStatus, Point, Quad } from '@shared/types';
 import type { RawImage } from '@worker/imageIo';
 import { type OpenCv, cvConstant, loadOpenCv, withMats } from '@worker/opencv';
@@ -91,6 +91,35 @@ const EDGE_TOUCH_TOLERANCE_PX = 2;
 const APPROX_EPSILON_RATIO = 0.01;
 
 /**
+ * 精密化パスで探索する範囲（カードの短辺に対する比）。
+ *
+ * 検出済みの外接矩形をこの割合だけ広げた範囲だけを、より低い閾値で見直す。
+ * 範囲を限らずに閾値を下げると、離れた位置にある陰影や他の物体まで拾って
+ * 輪郭が繋がってしまう（実測では券面の 14mm 左に別の濃い領域があった）。
+ */
+const REFINE_MARGIN_RATIO = 0.12;
+
+/**
+ * 精密化パスの閾値に用いるシグマの倍数。
+ *
+ * 本検出の 6 に対して 2 と低くする。券面のきわの陰影は淡く、本検出の閾値では
+ * 漏れることがある。漏れた辺の側へ中心が偏り、規格寸法の枠を置いたときに
+ * その辺だけ見切れる（実測で左 0.04mm・下 0.1mm まで詰まっていた）。
+ */
+const REFINE_SIGMA_MULTIPLIER = 2;
+
+/** 精密化パスの閾値の下限。本検出の 4 より低く取る。 */
+const MIN_REFINE_THRESHOLD = 2;
+
+/**
+ * 中心補正で許容する移動量（カードの短辺に対する比）。
+ *
+ * 実測の偏りは 0.6〜1.5mm（短辺 54mm に対し 3% 弱）。隣接する影を巻き込むと
+ * 中心はこれよりはるかに大きく動くため、6% を超える補正は棄却する。
+ */
+const MAX_CENTER_SHIFT_RATIO = 0.06;
+
+/**
  * プロキシ画像からカードの四隅を検出する。
  *
  * @param proxy 長辺 1600px のプロキシ画像（RGB）
@@ -149,9 +178,15 @@ export async function detectCard(
     }
 
     const best = candidates[evaluation.bestIndex]!;
+    const coarse = orderCorners(best.corners);
+
+    // 淡い縁を取り逃していると中心が偏る。近傍だけを低い閾値で見直して
+    // **中心のずれだけ**を補正する（大きさは規格値、傾きは粗検出のものを使う）。
+    const corrected = correctCenter(cv, deltaE, proxy, ringIndices, coarse, track);
+
     return {
       status: evaluation.status,
-      quad: scaleQuad(orderCorners(best.corners), scaleToOriginal),
+      quad: scaleQuad(corrected, scaleToOriginal),
       confidence: evaluation.bestScore,
       hasMultipleCandidates: evaluation.hasMultipleCandidates,
     };
@@ -464,6 +499,107 @@ export function rotatedRectCorners(rect: {
     x: rect.center.x + x * cos - y * sin,
     y: rect.center.y + x * sin + y * cos,
   }));
+}
+
+/**
+ * 券面の近傍を低い閾値で見直し、**中心のずれだけ**を補正した四隅を返す。
+ *
+ * 大きさは規格値から与え（`officialCrop`）、傾きは粗検出で十分な精度が出ている。
+ * 残る誤差は中心の偏りだけであり、それは券面のきわの陰影が淡くてマスクから
+ * 漏れることで生じる。漏れた辺と反対側へ中心が寄り、規格寸法の枠を置いたときに
+ * 漏れた側が見切れる（実測で左 0.04mm・下 0.1mm まで詰まっていた）。
+ *
+ * 低い閾値は隣接する影を巻き込む危険があるため、**移動量に上限を課す**。
+ * 実測では影を巻き込むと面積が 1.5 倍に膨らみ中心も大きく動いたので、
+ * 妥当な補正だけが通るようにしている。補正できない場合は粗検出のまま返す。
+ */
+function correctCenter(
+  cv: OpenCv,
+  deltaE: Float32Array,
+  proxy: RawImage,
+  ringIndices: Uint32Array,
+  coarse: Quad,
+  track: <M extends { delete: () => void }>(mat: M) => M,
+): Quad {
+  const points = quadToArray(coarse);
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const width = Math.max(...xs) - Math.min(...xs);
+  const height = Math.max(...ys) - Math.min(...ys);
+  const shortSide = Math.min(width, height);
+  const margin = Math.max(4, Math.round(shortSide * REFINE_MARGIN_RATIO));
+
+  const left = Math.max(0, Math.floor(Math.min(...xs)) - margin);
+  const top = Math.max(0, Math.floor(Math.min(...ys)) - margin);
+  const right = Math.min(proxy.width - 1, Math.ceil(Math.max(...xs)) + margin);
+  const bottom = Math.min(proxy.height - 1, Math.ceil(Math.max(...ys)) + margin);
+  if (right <= left || bottom <= top) return coarse;
+
+  const median = medianOf(deltaE, ringIndices, (value) => value);
+  const mad = medianOf(deltaE, ringIndices, (value) => Math.abs(value - median));
+  const threshold = Math.max(
+    MIN_REFINE_THRESHOLD,
+    median + REFINE_SIGMA_MULTIPLIER * MAD_TO_SIGMA * mad,
+  );
+
+  const mask = track(new cv.Mat(proxy.height, proxy.width, cv.CV_8UC1));
+  mask.data.fill(0);
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      const index = y * proxy.width + x;
+      if (deltaE[index]! > threshold) mask.data[index] = 255;
+    }
+  }
+
+  // 淡い縁は途切れがちなので、本検出より大きめの構造要素で繋ぐ。
+  const kernel = track(
+    cv.getStructuringElement(cvConstant(cv.MORPH_RECT, 'MORPH_RECT'), new cv.Size(9, 9)),
+  );
+  cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+
+  const contours = track(new cv.MatVector());
+  const hierarchy = track(new cv.Mat());
+  cv.findContours(
+    mask,
+    contours,
+    hierarchy,
+    cvConstant(cv.RETR_EXTERNAL, 'RETR_EXTERNAL'),
+    cvConstant(cv.CHAIN_APPROX_SIMPLE, 'CHAIN_APPROX_SIMPLE'),
+  );
+
+  let bestCenter: Point | null = null;
+  let bestArea = 0;
+  for (let i = 0; i < contours.size(); i += 1) {
+    const contour = contours.get(i);
+    try {
+      const area = cv.contourArea(contour);
+      if (area <= bestArea) continue;
+      const rect = cv.minAreaRect(contour);
+      if (rect.size.width <= 0 || rect.size.height <= 0) continue;
+      bestArea = area;
+      bestCenter = { x: rect.center.x, y: rect.center.y };
+    } finally {
+      contour.delete();
+    }
+  }
+
+  if (bestCenter === null) return coarse;
+
+  const coarseCenter = {
+    x: xs.reduce((sum, v) => sum + v, 0) / xs.length,
+    y: ys.reduce((sum, v) => sum + v, 0) / ys.length,
+  };
+  const shiftX = bestCenter.x - coarseCenter.x;
+  const shiftY = bestCenter.y - coarseCenter.y;
+  const limit = shortSide * MAX_CENTER_SHIFT_RATIO;
+  if (Math.hypot(shiftX, shiftY) > limit) return coarse;
+
+  return {
+    topLeft: { x: coarse.topLeft.x + shiftX, y: coarse.topLeft.y + shiftY },
+    topRight: { x: coarse.topRight.x + shiftX, y: coarse.topRight.y + shiftY },
+    bottomRight: { x: coarse.bottomRight.x + shiftX, y: coarse.bottomRight.y + shiftY },
+    bottomLeft: { x: coarse.bottomLeft.x + shiftX, y: coarse.bottomLeft.y + shiftY },
+  };
 }
 
 /** 四隅のうち、画像の端に接している辺の数を数える（0..4）。 */

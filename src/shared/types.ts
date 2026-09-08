@@ -27,7 +27,13 @@ export type ExclusionReason =
   | 'doesNotFitPrintableArea';
 
 /** 警告コード（除外はしないが利用者へ知らせる事象）。 */
-export type WarningCode = 'dpiMissing' | 'multipleCandidates' | 'lowConfidence' | 'iccIgnored';
+export type WarningCode =
+  | 'dpiMissing'
+  | 'multipleCandidates'
+  | 'lowConfidence'
+  | 'iccIgnored'
+  /** 実測寸法が規格値（運転免許証・マイナンバーカード・旅券）と一致しない */
+  | 'nonStandardSize';
 
 /** 上限超過の詳細。利用者への具体的な対処提示に使う（仕様書 §9）。 */
 export interface LimitViolation {
@@ -75,8 +81,16 @@ export interface AnalyzedImage {
   readonly embeddedDpi: number | null;
   /** 実際に適用した DPI */
   readonly effectiveDpi: number;
-  /** 切り出し結果の物理サイズ。検出失敗時は null */
+  /**
+   * A4 上へ配置する物理サイズ（券面＋余白）。検出失敗時は null。
+   * レイアウトの収まり判定にはこちらを使う。
+   */
   readonly physicalSize: SizeMm | null;
+  /**
+   * 券面そのものの物理サイズ。規格値と一致すればその確定値が入る。
+   * 確認画面の表示に使う（利用者が関心を持つのは券面の大きさであるため）。
+   */
+  readonly cardSizeMm: SizeMm | null;
   /** 検出スコア（0..1）。検出失敗時は null */
   readonly confidence: number | null;
   readonly warnings: readonly WarningCode[];
@@ -114,6 +128,8 @@ export interface ComposeResult {
   readonly fileNames: readonly string[];
   /** 出力ディレクトリの絶対パス（「フォルダを開く」用。ログには残さない） */
   readonly outputDirectory: string;
+  /** 生成ページのサムネイル（WebP）。メモリ上のみ。ファイル名と同じ順序 */
+  readonly pageThumbnails: readonly ArrayBuffer[];
   /** 除外された画像とその理由 */
   readonly excluded: readonly {
     readonly relativePath: string;

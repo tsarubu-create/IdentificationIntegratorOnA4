@@ -9,7 +9,11 @@
 import { stat } from 'node:fs/promises';
 import sharp from 'sharp';
 import type { Sharp } from 'sharp';
-import { PROXY_LONG_EDGE_PX, THUMBNAIL_LONG_EDGE_PX } from '@shared/limits';
+import {
+  PROXY_LONG_EDGE_PX,
+  RESULT_THUMBNAIL_LONG_EDGE_PX,
+  THUMBNAIL_LONG_EDGE_PX,
+} from '@shared/limits';
 import type { SizePx } from '@shared/types';
 import type { RectPx } from '@core/layout/a4';
 import { PAGE_BACKGROUND } from '@core/layout/a4';
@@ -204,6 +208,24 @@ export function encodeThumbnailFromFile(filePath: string, ignoreIcc = false): Pr
     })
     .removeAlpha()
     .webp({ quality: 72 })
+    .toBuffer();
+}
+
+/**
+ * 生成済みページのバイト列からサムネイルを作る（出力結果画面用）。
+ *
+ * **ディスクへは書き出さない**（仕様書 §11-5）。ページ画像と同じく、
+ * ArrayBuffer としてレンダラへ渡し、表示後に解放する。
+ */
+export function encodePageThumbnail(pageBytes: Buffer): Promise<Buffer> {
+  return sharp(pageBytes)
+    .resize({
+      width: RESULT_THUMBNAIL_LONG_EDGE_PX,
+      height: RESULT_THUMBNAIL_LONG_EDGE_PX,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .webp({ quality: 80 })
     .toBuffer();
 }
 

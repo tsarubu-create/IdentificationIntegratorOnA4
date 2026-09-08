@@ -36,6 +36,7 @@ export const WARNING_LABEL: Record<WarningCode, string> = {
   multipleCandidates: '候補が複数あります',
   lowConfidence: '検出の確からしさが低めです',
   iccIgnored: 'カラープロファイルを無視して読み込みました',
+  nonStandardSize: '規格の寸法と一致しません（実測値で配置します）',
 };
 
 /**

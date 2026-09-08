@@ -56,7 +56,7 @@ export function ReviewScreen({
               <th scope="col">相対パス</th>
               <th scope="col">検出状態</th>
               <th scope="col">DPI</th>
-              <th scope="col">A4 上の配置サイズ</th>
+              <th scope="col">券面サイズ</th>
               <th scope="col">種別</th>
               <th scope="col">警告・除外理由</th>
             </tr>
@@ -119,10 +119,18 @@ function ReviewRow({ image, kind, onChangeKind }: ReviewRowProps): React.JSX.Ele
         </span>
       </td>
       <td className="review__dpi">{formatDpi(image.embeddedDpi)}</td>
-      <td>
-        {placement === null
-          ? '—'
-          : formatSizeMm(placement.sizeMm.widthMm, placement.sizeMm.heightMm)}
+      <td className="review__size">
+        {image.cardSizeMm === null || placement === null ? (
+          '—'
+        ) : (
+          <>
+            <div>{formatSizeMm(image.cardSizeMm.widthMm, image.cardSizeMm.heightMm)}</div>
+            {/* 実際に貼り付ける領域は、見切れ防止の余白ぶんだけ大きい。 */}
+            <div className="review__size-note">
+              配置枠 {formatSizeMm(placement.sizeMm.widthMm, placement.sizeMm.heightMm)}
+            </div>
+          </>
+        )}
       </td>
       <td>
         <select

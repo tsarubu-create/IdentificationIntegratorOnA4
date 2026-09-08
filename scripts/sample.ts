@@ -113,6 +113,7 @@ async function toItem(
     cardSizeMm: analysis.image.physicalSize!,
     kind,
     ignoreIcc: analysis.ignoreIcc,
+    effectiveDpi: analysis.image.effectiveDpi,
     sourceWidth: header.width,
     sourceHeight: header.height,
   };

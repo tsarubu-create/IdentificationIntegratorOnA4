@@ -149,6 +149,7 @@ export function buildComposeItems(
       cardSizeMm: result.image.physicalSize,
       kind: kinds[relativePath] ?? 'idCard',
       ignoreIcc: result.ignoreIcc,
+      effectiveDpi: result.image.effectiveDpi,
       sourceWidth: result.sourceWidth,
       sourceHeight: result.sourceHeight,
     });

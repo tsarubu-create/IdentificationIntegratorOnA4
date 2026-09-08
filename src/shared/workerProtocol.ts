@@ -33,6 +33,8 @@ export interface ComposeTaskItem {
   readonly cardSizeMm: SizeMm;
   readonly kind: DocumentKind;
   readonly ignoreIcc: boolean;
+  /** 画像に適用する解像度（規格値を画素へ換算するために使う） */
+  readonly effectiveDpi: number;
   readonly sourceWidth: number;
   readonly sourceHeight: number;
 }
@@ -47,6 +49,8 @@ export interface ComposeTask {
 export interface ComposeTaskResult {
   readonly fileNames: readonly string[];
   readonly excluded: readonly { relativePath: string; reason: ExclusionReason }[];
+  /** 生成ページのサムネイル（WebP）。ファイル名と同じ順序 */
+  readonly pageThumbnails: readonly ArrayBuffer[];
 }
 
 /** main -> worker。 */

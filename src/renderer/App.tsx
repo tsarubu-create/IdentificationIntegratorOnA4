@@ -133,7 +133,11 @@ export function App(): React.JSX.Element {
         )}
 
         {phase === 'analyzing' && (
-          <ProgressPanel title="画像を解析しています" progress={progress} onCancel={() => void cancel()} />
+          <ProgressPanel
+            title="画像を解析しています"
+            progress={progress}
+            onCancel={() => void cancel()}
+          />
         )}
 
         {phase === 'review' && (

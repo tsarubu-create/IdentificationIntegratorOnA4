@@ -188,6 +188,7 @@ function registerIpcHandlers(): void {
             fileNames: outcome.fileNames,
             outputDirectory: directory,
             excluded: outcome.excluded,
+            pageThumbnails: outcome.pageThumbnails,
           },
         };
       } catch (error) {

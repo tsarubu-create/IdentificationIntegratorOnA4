@@ -29,6 +29,21 @@ export const PROXY_LONG_EDGE_PX = 1600;
 /** 確認画面サムネイルの長辺画素数（メモリ上の WebP として保持する）。 */
 export const THUMBNAIL_LONG_EDGE_PX = 240;
 
+/**
+ * 出力結果画面のサムネイルを、確認画面のプレビューの何倍で表示するか。
+ *
+ * 出力結果は「意図した配置になっているか」を確かめるためのものなので、
+ * 入力プレビューより大きく出す。
+ */
+export const RESULT_THUMBNAIL_SCALE = 3;
+
+/**
+ * 出力結果サムネイルの長辺画素数。
+ *
+ * 表示倍率と同じ 3 倍にすると拡大時にぼやけるため、余裕を持たせて確保する。
+ */
+export const RESULT_THUMBNAIL_LONG_EDGE_PX = THUMBNAIL_LONG_EDGE_PX * RESULT_THUMBNAIL_SCALE * 2;
+
 /** OpenCV(WASM) へ渡す Mat の最大画素数。原寸全体を WASM へ渡さないための防壁。 */
 export const MAX_WASM_MAT_PX = 40_000_000;
 

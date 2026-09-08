@@ -18,6 +18,7 @@ function image(overrides: Partial<AnalyzedImage> = {}): AnalyzedImage {
     embeddedDpi: 300,
     effectiveDpi: 300,
     physicalSize: { widthMm: 85.6, heightMm: 54 },
+    cardSizeMm: { widthMm: 85.6, heightMm: 54 },
     confidence: 0.9,
     warnings: [],
     exclusion: null,

@@ -2,6 +2,7 @@
 
 import type { ComposeResult } from '@shared/types';
 import { EXCLUSION_LABEL } from '@renderer/labels';
+import { Thumbnail } from '@renderer/components/Thumbnail';
 
 interface ResultScreenProps {
   readonly result: ComposeResult;
@@ -35,10 +36,18 @@ export function ResultScreen({
 
       {result.fileNames.length > 0 && (
         <>
-          <h3>生成したファイル</h3>
-          <ul className="result__files">
-            {result.fileNames.map((name) => (
-              <li key={name}>{name}</li>
+          <h3>生成したページ</h3>
+          {/* 出力結果は確認画面のプレビューの 3 倍で表示する（配置の確認用）。 */}
+          <ul className="result__pages">
+            {result.fileNames.map((name, index) => (
+              <li key={name} className="result__page">
+                <Thumbnail
+                  data={result.pageThumbnails[index] ?? null}
+                  alt={`${name} の出力結果`}
+                  variant="result"
+                />
+                <span className="result__page-name">{name}</span>
+              </li>
             ))}
           </ul>
         </>

@@ -11,9 +11,15 @@ import { useEffect, useState } from 'react';
 interface ThumbnailProps {
   readonly data: ArrayBuffer | null;
   readonly alt: string;
+  /**
+   * 表示の大きさ。
+   * - `review`: 確認画面の入力プレビュー
+   * - `result`: 出力結果画面。入力プレビューの縦横 3 倍で表示する
+   */
+  readonly variant?: 'review' | 'result';
 }
 
-export function Thumbnail({ data, alt }: ThumbnailProps): React.JSX.Element {
+export function Thumbnail({ data, alt, variant = 'review' }: ThumbnailProps): React.JSX.Element {
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -30,9 +36,11 @@ export function Thumbnail({ data, alt }: ThumbnailProps): React.JSX.Element {
     };
   }, [data]);
 
+  const className = variant === 'result' ? 'thumbnail thumbnail--result' : 'thumbnail';
+
   if (url === null) {
-    return <div className="thumbnail thumbnail--empty">画像なし</div>;
+    return <div className={`${className} thumbnail--empty`}>画像なし</div>;
   }
 
-  return <img className="thumbnail" src={url} alt={alt} />;
+  return <img className={className} src={url} alt={alt} />;
 }

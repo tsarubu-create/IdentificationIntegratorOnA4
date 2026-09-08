@@ -166,3 +166,56 @@ export function polygonArea(points: readonly Point[]): number {
   }
   return Math.abs(sum) / 2;
 }
+
+/** 四隅の重心（中心）。 */
+export function quadCenter(quad: Quad): Point {
+  const points = quadToArray(quad);
+  return {
+    x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+    y: points.reduce((sum, p) => sum + p.y, 0) / points.length,
+  };
+}
+
+/**
+ * 四隅の傾き（ラジアン）。上辺の向きで測る。
+ *
+ * 上辺と下辺の平均を採るのは、片方の辺だけが検出誤差でずれた場合に
+ * 角度が振れるのを避けるため。
+ */
+export function quadAngle(quad: Quad): number {
+  const top = Math.atan2(quad.topRight.y - quad.topLeft.y, quad.topRight.x - quad.topLeft.x);
+  const bottom = Math.atan2(
+    quad.bottomRight.y - quad.bottomLeft.y,
+    quad.bottomRight.x - quad.bottomLeft.x,
+  );
+  return (top + bottom) / 2;
+}
+
+/**
+ * 中心・傾き・寸法から四隅を組み立てる。
+ *
+ * **大きさを規格値から与える**ために使う（README §3.2）。位置と傾きは画像から、
+ * 大きさは規格から取ることで、同一カードの表裏で寸法が食い違わなくなる。
+ *
+ * @param center 中心座標
+ * @param angleRad 傾き（ラジアン）
+ * @param size 画素単位の寸法
+ */
+export function quadFromCenter(center: Point, angleRad: number, size: SizePx): Quad {
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  const halfWidth = size.width / 2;
+  const halfHeight = size.height / 2;
+
+  const corner = (dx: number, dy: number): Point => ({
+    x: center.x + dx * cos - dy * sin,
+    y: center.y + dx * sin + dy * cos,
+  });
+
+  return {
+    topLeft: corner(-halfWidth, -halfHeight),
+    topRight: corner(halfWidth, -halfHeight),
+    bottomRight: corner(halfWidth, halfHeight),
+    bottomLeft: corner(-halfWidth, halfHeight),
+  };
+}

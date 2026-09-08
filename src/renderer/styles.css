@@ -44,7 +44,12 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family:
-    'Yu Gothic UI', 'Meiryo', 'Hiragino Kaku Gothic ProN', system-ui, -apple-system, sans-serif;
+    'Yu Gothic UI',
+    'Meiryo',
+    'Hiragino Kaku Gothic ProN',
+    system-ui,
+    -apple-system,
+    sans-serif;
   font-size: 14px;
   line-height: 1.6;
 }
@@ -291,6 +296,15 @@ body {
   font-size: 12.5px;
 }
 
+.review__size {
+  white-space: nowrap;
+}
+
+.review__size-note {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
 .review__reasons {
   max-width: 300px;
 }
@@ -304,6 +318,38 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   background: #fff;
+}
+
+/*
+ * 出力結果のサムネイル。確認画面の入力プレビュー（108 x 76px）の
+ * 縦横 3 倍で表示し、配置を確認できるようにする。
+ */
+.thumbnail--result {
+  width: 324px;
+  max-height: 458px;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
+}
+
+.result__pages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.result__page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.result__page-name {
+  font-family: 'Consolas', 'Cascadia Mono', monospace;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .thumbnail--empty {

@@ -45,6 +45,17 @@ export interface SyntheticScanOptions {
   };
   /** 透過 PNG として出力する（背景を透明にする） */
   readonly transparent?: boolean;
+  /**
+   * 指定した辺のきわを、背景に近い淡い色で塗る。
+   *
+   * 実機の白い身分証（運転免許証・マイナンバーカード）を白いスキャナ背景で
+   * 読んだときの再現。券面のきわの陰影が淡く、色差マスクから漏れる状況を作る。
+   */
+  readonly faintEdges?: readonly ('top' | 'bottom' | 'left' | 'right')[];
+  /** 淡くする帯の幅（画素） */
+  readonly faintBandPx?: number;
+  /** 淡い帯の色（省略時は背景に近い色） */
+  readonly faintColor?: string;
 }
 
 const DEFAULTS = {
@@ -67,6 +78,9 @@ async function renderCard(
   rotationDeg: number,
   backgroundColor: string,
   withInnerPattern: boolean,
+  faintEdges: readonly ('top' | 'bottom' | 'left' | 'right')[] = [],
+  faintBandPx = 6,
+  faintColor = '#f4f4f2',
 ): Promise<{ buffer: Buffer; width: number; height: number }> {
   let card = sharp({
     create: { width, height, channels: 3, background: color },
@@ -101,6 +115,27 @@ async function renderCard(
       { input: stripe, left: Math.round(width * 0.08), top: Math.round(height * 0.45) },
       { input: photo, left: Math.round(width * 0.7), top: Math.round(height * 0.25) },
     ]);
+  }
+
+  if (faintEdges.length > 0) {
+    // きわを背景に近い色で塗り、色差マスクから漏れる淡い縁を再現する。
+    const band = Math.max(1, faintBandPx);
+    const strip = async (w: number, h: number): Promise<Buffer> =>
+      sharp({ create: { width: w, height: h, channels: 3, background: faintColor } })
+        .png()
+        .toBuffer();
+
+    const overlays: OverlayOptions[] = [];
+    if (faintEdges.includes('top'))
+      overlays.push({ input: await strip(width, band), left: 0, top: 0 });
+    if (faintEdges.includes('bottom'))
+      overlays.push({ input: await strip(width, band), left: 0, top: height - band });
+    if (faintEdges.includes('left'))
+      overlays.push({ input: await strip(band, height), left: 0, top: 0 });
+    if (faintEdges.includes('right'))
+      overlays.push({ input: await strip(band, height), left: width - band, top: 0 });
+
+    card = sharp(await card.png().toBuffer()).composite(overlays);
   }
 
   const rotated =
@@ -172,6 +207,9 @@ export async function syntheticScan(options: SyntheticScanOptions = {}): Promise
     rotationDeg,
     backgroundColor,
     withInnerPattern,
+    options.faintEdges ?? [],
+    options.faintBandPx ?? 6,
+    options.faintColor ?? '#f4f4f2',
   );
 
   const centerX = options.centerX ?? Math.round(canvasWidth / 2);

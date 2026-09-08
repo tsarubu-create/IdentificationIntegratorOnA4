@@ -10,10 +10,10 @@
 
 import { FALLBACK_DPI } from '@shared/limits';
 import type { AnalyzedImage, ExclusionReason, Quad, WarningCode } from '@shared/types';
-import { normalizeDpi, physicalSize } from '@core/dpi/dpi';
+import { normalizeDpi } from '@core/dpi/dpi';
 import { checkLimits } from '@core/limits/guard';
 import { resolvePlacement } from '@core/layout/placement';
-import { warpTargetSize } from '@core/geometry/quad';
+import { officialCrop } from '@core/standards/officialCrop';
 import { detectCard } from '@worker/detector';
 import { createDetectionProxy, encodeThumbnailFromFile, readHeader } from '@worker/imageIo';
 
@@ -123,8 +123,12 @@ export async function analyzeImage(request: AnalyzeRequest): Promise<ImageAnalys
     };
   }
 
-  const cardSizePx = warpTargetSize(detection.quad);
-  const cardSizeMm = physicalSize(cardSizePx, dpi.effectiveDpi);
+  // 大きさは規格値から与える（README §3.2）。縁検出の誤差が寸法に乗らないため、
+  // 同一カードの表裏で切り出しサイズが食い違わない。
+  const crop = officialCrop(detection.quad, 'idCard', dpi.effectiveDpi);
+  if (!crop.matched) warnings.push('nonStandardSize');
+
+  const cardSizeMm = crop.sizeMm;
   // 既定の種別（身分証カード）で収まるかを判定する。
   // 利用者が確認画面で種別を変えた場合は、UI 側が同じ関数で再計算する。
   const placement = resolvePlacement(cardSizeMm, 'idCard');
@@ -136,6 +140,7 @@ export async function analyzeImage(request: AnalyzeRequest): Promise<ImageAnalys
       embeddedDpi: dpi.embeddedDpi,
       effectiveDpi: dpi.effectiveDpi,
       physicalSize: cardSizeMm,
+      cardSizeMm: crop.cardSizeMm,
       confidence: detection.confidence,
       exclusion: placement.exclusion,
       warnings,
@@ -155,6 +160,7 @@ function baseImage(request: AnalyzeRequest): AnalyzedImage {
     embeddedDpi: null,
     effectiveDpi: FALLBACK_DPI,
     physicalSize: null,
+    cardSizeMm: null,
     confidence: null,
     warnings: [],
     exclusion: null,

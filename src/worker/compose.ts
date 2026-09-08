@@ -9,10 +9,17 @@
 import { PAGE_SIZE_PX } from '@core/layout/a4';
 import { type PageItem, paginate } from '@core/layout/pagination';
 import { boundingBox, translateQuad } from '@core/geometry/quad';
+import { officialCrop } from '@core/standards/officialCrop';
 import { resolvePlacement } from '@core/layout/placement';
 import { sortByRelativePath } from '@core/scan/naturalSort';
 import type { DocumentKind, ExclusionReason, Quad, SizeMm } from '@shared/types';
-import { type CompositeItem, composeA4Page, extractRegion, rawToSizedPng } from '@worker/imageIo';
+import {
+  type CompositeItem,
+  composeA4Page,
+  encodePageThumbnail,
+  extractRegion,
+  rawToSizedPng,
+} from '@worker/imageIo';
 import { rotate90, warpQuad } from '@worker/warp';
 import { resolveStartSequence, writePageExclusive } from '@worker/output';
 
@@ -29,6 +36,8 @@ export interface ComposeItem {
   /** 利用者が確認画面で選択した種別 */
   readonly kind: DocumentKind;
   readonly ignoreIcc: boolean;
+  /** 画像に適用する解像度（規格値を画素へ換算するために使う） */
+  readonly effectiveDpi: number;
   /** 元画像の寸法（外接矩形を画像内へ収めるために使う） */
   readonly sourceWidth: number;
   readonly sourceHeight: number;
@@ -46,6 +55,8 @@ export interface ComposeOptions {
 export interface ComposeOutcome {
   readonly fileNames: readonly string[];
   readonly excluded: readonly { relativePath: string; reason: ExclusionReason }[];
+  /** 生成ページのサムネイル（WebP）。ファイル名と同じ順序 */
+  readonly pageThumbnails: readonly ArrayBuffer[];
 }
 
 /** 透視変換で端が欠けないよう、外接矩形に付ける余白。 */
@@ -82,6 +93,7 @@ export async function composePages(
 
   const pages = paginate(pageItems);
   const fileNames: string[] = [];
+  const pageThumbnails: ArrayBuffer[] = [];
   let sequence = await resolveStartSequence(options.outputDirectory);
 
   for (const [pageIndex, page] of pages.entries()) {
@@ -105,10 +117,20 @@ export async function composePages(
 
     sequence = written.sequence + 1;
     fileNames.push(written.fileName);
+    pageThumbnails.push(await toArrayBuffer(encodePageThumbnail(pageBytes)));
     options.onPageWritten?.(written.fileName, pageIndex + 1, pages.length);
   }
 
-  return { fileNames, excluded };
+  return { fileNames, excluded, pageThumbnails };
+}
+
+/** Buffer を、共有プールから切り離した ArrayBuffer へ変換する。 */
+async function toArrayBuffer(source: Promise<Buffer>): Promise<ArrayBuffer> {
+  const buffer = await source;
+  return buffer.buffer.slice(
+    buffer.byteOffset,
+    buffer.byteOffset + buffer.byteLength,
+  ) as ArrayBuffer;
 }
 
 /**
@@ -120,14 +142,18 @@ async function renderCard(
   item: ComposeItem,
   targetSize: { width: number; height: number },
 ): Promise<Buffer> {
+  // 利用者が選んだ種別の規格値で切り出し枠を確定する。規格値のほうが実測より
+  // 大きければ枠は外側へ広がるため、券面のきわを取り逃していても見切れない。
+  const quad = officialCrop(item.quad, item.kind, item.effectiveDpi).quad;
+
   const box = boundingBox(
-    item.quad,
+    quad,
     { width: item.sourceWidth, height: item.sourceHeight },
     CROP_PADDING_PX,
   );
 
   const crop = await extractRegion(item.filePath, box, item.ignoreIcc);
-  const warped = await warpQuad(crop, translateQuad(item.quad, box));
+  const warped = await warpQuad(crop, translateQuad(quad, box));
   const oriented = item.kind === 'passportSpread' ? await rotate90(warped) : warped;
 
   return rawToSizedPng(oriented, targetSize);

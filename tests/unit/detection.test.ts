@@ -97,6 +97,39 @@ describe('カード検出（仕様書 §5）', () => {
     expect(size.height).toBeLessThan(404 * 1.03);
   });
 
+  it('カードが画面の大半を占めていても検出できる（密着スキャン）', async () => {
+    // 閾値の統計を画像全体から取ると、カードが多数派になった時点で中央値が
+    // カード側へ移り、閾値が跳ね上がって何も検出できなくなる。
+    // スキャナに密着させた実運用での撮り方なので、面積比の大きい側を必ず押さえる。
+    const filePath = await writeFixture(
+      'dominant.png',
+      await syntheticScan({
+        canvasWidth: 1200,
+        canvasHeight: 900,
+        cardWidth: 1100,
+        cardHeight: 694,
+      }),
+    );
+    const result = await detect(filePath);
+
+    expect(result.status).not.toBe('failed');
+    expect(result.quad).not.toBeNull();
+  });
+
+  it('面積比を変えても一貫して検出できる', async () => {
+    // 面積比 0.2 から 0.8 まで、閾値の決め方が破綻しないことを確認する。
+    for (const scale of [0.45, 0.6, 0.75, 0.9]) {
+      const cardWidth = Math.round(1200 * scale);
+      const cardHeight = Math.round(cardWidth / 1.585);
+      const filePath = await writeFixture(
+        `scale_${scale}.png`,
+        await syntheticScan({ canvasWidth: 1200, canvasHeight: 900, cardWidth, cardHeight }),
+      );
+      const result = await detect(filePath);
+      expect(result.status, `面積比 scale=${scale} で検出に失敗しました`).not.toBe('failed');
+    }
+  });
+
   it('カードが無い画像は検出失敗になる', async () => {
     const filePath = await writeFixture('blank.png', await syntheticBlank());
     const result = await detect(filePath);

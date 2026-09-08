@@ -34,6 +34,14 @@ const BORDER_RING_RATIO = 0.04;
 /** 色差の最小閾値。これを下回る差は紙の地色ムラとみなす。 */
 const MIN_DELTA_E_THRESHOLD = 12;
 
+/**
+ * 色差の最大閾値。
+ *
+ * 外周に影やムラがあると MAD が大きくなり、閾値が実在のカードとの色差を
+ * 上回ってしまう。淡色のカードでも ΔE 35 程度は背景と差が出るため、そこで頭打ちにする。
+ */
+const MAX_DELTA_E_THRESHOLD = 35;
+
 /** 適応的閾値の係数（中央値 + k * MAD）。 */
 const MAD_MULTIPLIER = 3;
 
@@ -60,9 +68,10 @@ export async function detectCard(
     const lab = track(new cv.Mat());
     cv.cvtColor(source, lab, cvConstant(cv.COLOR_RGB2Lab, 'COLOR_RGB2Lab'));
 
+    const ringIndices = borderRingIndices(proxy.width, proxy.height);
     const background = estimateBackgroundLab(lab.data, proxy.width, proxy.height);
     const deltaE = computeDeltaE(lab.data, proxy.width * proxy.height, background);
-    const threshold = adaptiveThreshold(deltaE);
+    const threshold = adaptiveThreshold(deltaE, ringIndices);
 
     const mask = track(maskFromDeltaE(cv, deltaE, proxy.width, proxy.height, threshold));
     applyMorphology(cv, mask, track);
@@ -128,6 +137,30 @@ interface LabColor {
 }
 
 /**
+ * 外周リングに含まれる画素インデックスを列挙する。
+ *
+ * 背景色の推定と閾値の決定で同じ領域を使うために共通化している。
+ * 「外周は背景である」という前提を 1 か所に閉じ込めておきたい。
+ */
+export function borderRingIndices(width: number, height: number): Uint32Array {
+  const ring = Math.max(1, Math.round(Math.min(width, height) * BORDER_RING_RATIO));
+  const indices: number[] = [];
+
+  for (let y = 0; y < height; y += 1) {
+    const isHorizontalBand = y < ring || y >= height - ring;
+    if (isHorizontalBand) {
+      for (let x = 0; x < width; x += 1) indices.push(y * width + x);
+      continue;
+    }
+    // 中段は左右の帯だけを拾う。
+    for (let x = 0; x < ring; x += 1) indices.push(y * width + x);
+    for (let x = Math.max(ring, width - ring); x < width; x += 1) indices.push(y * width + x);
+  }
+
+  return Uint32Array.from(indices);
+}
+
+/**
  * 外周リングから背景色を推定する。
  *
  * **平均ではなく中央値**を採る。カードが画像の端に接している場合、平均だと
@@ -138,32 +171,22 @@ export function estimateBackgroundLab(
   width: number,
   height: number,
 ): LabColor {
-  const ring = Math.max(1, Math.round(Math.min(width, height) * BORDER_RING_RATIO));
+  const indices = borderRingIndices(width, height);
   const histograms = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
-  let count = 0;
 
-  for (let y = 0; y < height; y += 1) {
-    const isVerticalBorder = y < ring || y >= height - ring;
-    for (let x = 0; x < width; x += 1) {
-      if (!isVerticalBorder && x >= ring && x < width - ring) {
-        // 内側は背景推定に使わないので、まとめて読み飛ばす。
-        x = width - ring - 1;
-        continue;
-      }
-      const offset = (y * width + x) * 3;
-      histograms[0]![labData[offset]!]! += 1;
-      histograms[1]![labData[offset + 1]!]! += 1;
-      histograms[2]![labData[offset + 2]!]! += 1;
-      count += 1;
-    }
+  for (const index of indices) {
+    const offset = index * 3;
+    histograms[0]![labData[offset]!]! += 1;
+    histograms[1]![labData[offset + 1]!]! += 1;
+    histograms[2]![labData[offset + 2]!]! += 1;
   }
 
-  if (count === 0) return { l: 255, a: 128, b: 128 };
+  if (indices.length === 0) return { l: 255, a: 128, b: 128 };
 
   return {
-    l: medianFromHistogram(histograms[0]!, count),
-    a: medianFromHistogram(histograms[1]!, count),
-    b: medianFromHistogram(histograms[2]!, count),
+    l: medianFromHistogram(histograms[0]!, indices.length),
+    a: medianFromHistogram(histograms[1]!, indices.length),
+    b: medianFromHistogram(histograms[2]!, indices.length),
   };
 }
 
@@ -204,27 +227,37 @@ export function computeDeltaE(
 }
 
 /**
- * 適応的な閾値を決める（中央値 + 3 * MAD、下限 12）。
+ * 適応的な閾値を決める。
  *
- * 固定閾値では、白背景と淡色背景のどちらかで必ず破綻する。中央値と MAD は
- * 外れ値（＝カード本体）に引きずられないため、背景側の分布だけを捉えられる。
+ * **統計は画像全体ではなく外周リングだけから取る。** 全体で中央値を採ると、
+ * カードが画面の大半を占める（＝密着スキャン）ときに中央値がカード側へ移り、
+ * 閾値が跳ね上がって何も検出できなくなる。外周は背景であるという前提のもとでは、
+ * リングの中央値と MAD は「背景のばらつき」そのものであり、閾値が超えるべき量に等しい。
+ *
+ * 上限を設けるのは、片側に影が落ちているなどでリングのばらつきが大きいとき、
+ * 閾値が実在のカードとの色差を超えてしまうのを防ぐため。
  */
-export function adaptiveThreshold(deltaE: Float32Array): number {
-  const histogram = new Uint32Array(256);
-  for (const value of deltaE) {
-    histogram[Math.min(255, Math.max(0, Math.round(value)))]! += 1;
-  }
+export function adaptiveThreshold(deltaE: Float32Array, ringIndices: Uint32Array): number {
+  if (ringIndices.length === 0) return MIN_DELTA_E_THRESHOLD;
 
-  const median = medianFromHistogram(histogram, deltaE.length);
+  const histogram = new Uint32Array(256);
+  for (const index of ringIndices) {
+    histogram[clampToByte(deltaE[index]!)]! += 1;
+  }
+  const median = medianFromHistogram(histogram, ringIndices.length);
 
   const deviations = new Uint32Array(256);
-  for (const value of deltaE) {
-    const deviation = Math.abs(Math.round(value) - median);
-    deviations[Math.min(255, deviation)]! += 1;
+  for (const index of ringIndices) {
+    deviations[Math.min(255, Math.abs(clampToByte(deltaE[index]!) - median))]! += 1;
   }
-  const mad = medianFromHistogram(deviations, deltaE.length);
+  const mad = medianFromHistogram(deviations, ringIndices.length);
 
-  return Math.max(MIN_DELTA_E_THRESHOLD, median + MAD_MULTIPLIER * mad);
+  const threshold = median + MAD_MULTIPLIER * mad;
+  return Math.min(MAX_DELTA_E_THRESHOLD, Math.max(MIN_DELTA_E_THRESHOLD, threshold));
+}
+
+function clampToByte(value: number): number {
+  return Math.min(255, Math.max(0, Math.round(value)));
 }
 
 /** 閾値を超えた画素を 255 とする 2 値マスクを作る。 */

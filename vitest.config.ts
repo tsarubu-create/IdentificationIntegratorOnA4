@@ -7,6 +7,7 @@ export default defineConfig({
       '@core': resolve('src/core'),
       '@shared': resolve('src/shared'),
       '@worker': resolve('src/worker'),
+      '@renderer': resolve('src/renderer'),
     },
   },
   test: {

@@ -122,6 +122,45 @@ describe('解析フェーズ（仕様書 §5 / §6 / §8）', () => {
     expect(await readdir(inputDir)).toEqual(before);
   });
 
+  it('確認用サムネイルに元画像全体でなく、出力と同じ切り出し領域を表示する', async () => {
+    const filePath = await putImage(
+      'preview.png',
+      await cardScanBytes({
+        canvasWidth: 2480,
+        canvasHeight: 3508,
+        centerX: 1700,
+        centerY: 2400,
+        withInnerPattern: false,
+        cardColor: '#205090',
+        backgroundColor: '#ffffff',
+      }),
+    );
+    const analysis = await analyzeImage({ id: '1', filePath, relativePath: 'preview.png' });
+    const thumbnail = sharp(Buffer.from(analysis.image.thumbnail!));
+    const meta = await thumbnail.metadata();
+    expect(meta.width / meta.height).toBeCloseTo(CELL_SIZE_MM.widthMm / CELL_SIZE_MM.heightMm, 1);
+    const { data, info } = await thumbnail
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const center = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * 3;
+    expect(data[center]).toBeLessThan(80);
+    expect(data[center + 2]).toBeGreaterThan(110);
+    const directory = await ensureOutputDirectory(outputRoot);
+    const item = await toComposeItem(filePath, 'preview.png');
+    const outcome = await composePages([item], { outputDirectory: directory });
+    // サムネイルを出力タイルと同じ大きさへ縮小して画素の差を比較する。
+    const output = await sharp(path.join(directory, outcome.fileNames[0]!))
+      .extract({ left: 118, top: 118, width: 1122, height: 818 })
+      .resize(meta.width, meta.height)
+      .removeAlpha()
+      .raw()
+      .toBuffer();
+    const difference =
+      data.reduce((sum, value, index) => sum + Math.abs(value - output[index]!), 0) / data.length;
+    expect(difference).toBeLessThan(5);
+  });
+
   it('検出できない画像は理由付きで除外される（停止しない）', async () => {
     const filePath = await putImage('blank.png', await syntheticBlank());
     const analysis = await analyzeImage({ id: '1', filePath, relativePath: 'blank.png' });

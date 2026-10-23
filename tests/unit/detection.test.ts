@@ -7,11 +7,12 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { detectCard, countEdgeTouches, rotatedRectCorners } from '@worker/detector';
 import { createDetectionProxy, readHeader } from '@worker/imageIo';
 import { warpQuad, rotate90 } from '@worker/warp';
-import { boundingBox, translateQuad, warpTargetSize } from '@core/geometry/quad';
+import { boundingBox, quadCenter, translateQuad, warpTargetSize } from '@core/geometry/quad';
 import { extractRegion } from '@worker/imageIo';
 import { syntheticBlank, syntheticScan } from '../fixtures/synthetic';
 
@@ -39,6 +40,103 @@ async function detect(filePath: string) {
 }
 
 describe('カード検出（仕様書 §5）', () => {
+  it.each([150, 600])('%i dpi の実寸カードを傾けても規格寸法で検出する', async (dpi) => {
+    const scale = dpi / 300;
+    const filePath = await writeFixture(
+      `size-${dpi}.png`,
+      await syntheticScan({
+        canvasWidth: Math.round(2400 * scale),
+        canvasHeight: Math.round(1800 * scale),
+        cardWidth: Math.round(1011 * scale),
+        cardHeight: Math.round(638 * scale),
+        rotationDeg: -25,
+        density: dpi,
+      }),
+    );
+    const proxy = await createDetectionProxy(filePath);
+    const result = await detectCard(proxy, proxy.scaleToOriginal, dpi);
+    expect(result.status).toBe('detected');
+    const size = warpTargetSize(result.quad!);
+    expect((size.width / dpi) * 25.4).toBeCloseTo(85.6, 0);
+    expect((size.height / dpi) * 25.4).toBeCloseTo(53.98, 0);
+  });
+  it('淡い券面の濃い印刷部分より、規格寸法に一致する外周を選ぶ', async () => {
+    const filePath = await writeFixture(
+      'faint-size.png',
+      await syntheticScan({
+        canvasWidth: 2480,
+        canvasHeight: 3508,
+        cardWidth: 1011,
+        cardHeight: 638,
+        centerX: 1500,
+        centerY: 1800,
+        backgroundColor: '#ffffff',
+        cardColor: '#f6f6f6',
+        density: 300,
+      }),
+    );
+    const proxy = await createDetectionProxy(filePath);
+    const result = await detectCard(proxy, proxy.scaleToOriginal, 300);
+    expect(result.status).toBe('detected');
+    expect(result.hasMultipleCandidates).toBe(false);
+    const size = warpTargetSize(result.quad!);
+    expect(size.width).toBeCloseTo(1011, -1);
+    expect(size.height).toBeCloseTo(638, -1);
+    expect(quadCenter(result.quad!).x).toBeCloseTo(1500, -1);
+    expect(quadCenter(result.quad!).y).toBeCloseTo(1800, -1);
+  });
+
+  it('形が似ている規格外の矩形より実寸が一致する券面を選ぶ', async () => {
+    const base = await syntheticScan({
+      canvasWidth: 2400,
+      canvasHeight: 1600,
+      cardWidth: 1011,
+      cardHeight: 638,
+      centerX: 1750,
+      centerY: 500,
+      density: 300,
+    });
+    const distractor = await sharp({
+      create: { width: 856, height: 540, channels: 3, background: '#205090' },
+    })
+      .png()
+      .toBuffer();
+    const filePath = await writeFixture(
+      'distractor.png',
+      await sharp(base)
+        .composite([{ input: distractor, left: 50, top: 950 }])
+        .png()
+        .toBuffer(),
+    );
+    const proxy = await createDetectionProxy(filePath);
+    const result = await detectCard(proxy, proxy.scaleToOriginal, 300);
+    expect(result.status).toBe('detected');
+    expect(quadCenter(result.quad!).x).toBeCloseTo(1750, -1);
+    expect(quadCenter(result.quad!).y).toBeCloseTo(500, -1);
+  });
+
+  it('閾値の違いで同じカードを複数と数えず、別のカードは複数と報告する', async () => {
+    for (const twoCards of [false, true]) {
+      const filePath = await writeFixture(
+        `sized-${twoCards}.png`,
+        await syntheticScan({
+          canvasWidth: 2400,
+          canvasHeight: 1600,
+          cardWidth: 1011,
+          cardHeight: 638,
+          centerX: 600,
+          centerY: 800,
+          density: 300,
+          ...(twoCards ? { secondCard: { color: '#2f6fb2', centerX: 1800, centerY: 800 } } : {}),
+        }),
+      );
+      const proxy = await createDetectionProxy(filePath);
+      const result = await detectCard(proxy, proxy.scaleToOriginal, 300);
+      expect(result.hasMultipleCandidates).toBe(twoCards);
+      expect(result.status).toBe(twoCards ? 'needsReview' : 'detected');
+    }
+  });
+
   it('淡色背景に置かれた濃色カードを検出する', async () => {
     const filePath = await writeFixture('plain.png', await syntheticScan());
     const result = await detect(filePath);

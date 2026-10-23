@@ -38,14 +38,14 @@ describe('種別に応じた除外判定', () => {
   });
 
   it('パスポート見開きは既定の身分証カードではセルに収まらない', () => {
-    const passport = image({ physicalSize: PASSPORT_SIZE, exclusion: 'doesNotFitCell' });
+    const passport = image({ cardSizeMm: PASSPORT_SIZE, exclusion: 'doesNotFitCell' });
     expect(resolveExclusion(passport, 'idCard')).toBe('doesNotFitCell');
   });
 
   it('種別をパスポート見開きへ変えると除外が解消される', () => {
     // 解析時は身分証カードとして判定され doesNotFitCell が付いているが、
     // 利用者が種別を選び直したら 90 度回転して印刷可能領域に収まる。
-    const passport = image({ physicalSize: PASSPORT_SIZE, exclusion: 'doesNotFitCell' });
+    const passport = image({ cardSizeMm: PASSPORT_SIZE, exclusion: 'doesNotFitCell' });
     expect(resolveExclusion(passport, 'passportSpread')).toBeNull();
     expect(resolvePlacement(PASSPORT_SIZE, 'passportSpread').fits).toBe(true);
   });
@@ -62,7 +62,7 @@ describe('種別に応じた除外判定', () => {
   });
 
   it('大きすぎるカードはどちらの種別でも収まらない', () => {
-    const huge = image({ physicalSize: { widthMm: 300, heightMm: 400 } });
+    const huge = image({ cardSizeMm: { widthMm: 300, heightMm: 400 } });
     expect(resolveExclusion(huge, 'idCard')).toBe('doesNotFitCell');
     expect(resolveExclusion(huge, 'passportSpread')).toBe('doesNotFitPrintableArea');
   });
@@ -75,7 +75,7 @@ describe('出力対象の件数（確認画面のヘッダ表示）', () => {
       image({
         id: 'passport',
         relativePath: 'passport.png',
-        physicalSize: PASSPORT_SIZE,
+        cardSizeMm: PASSPORT_SIZE,
         exclusion: 'doesNotFitCell',
       }),
       image({

@@ -13,9 +13,17 @@ import type { AnalyzedImage, ExclusionReason, Quad, WarningCode } from '@shared/
 import { normalizeDpi } from '@core/dpi/dpi';
 import { checkLimits } from '@core/limits/guard';
 import { resolvePlacement } from '@core/layout/placement';
-import { resolveCardSize } from '@core/standards/officialCrop';
+import { cropQuad, resolveCardSize } from '@core/standards/officialCrop';
+import { boundingBox, scaleQuad, translateQuad } from '@core/geometry/quad';
 import { detectCard } from '@worker/detector';
-import { createDetectionProxy, encodeThumbnailFromFile, readHeader } from '@worker/imageIo';
+import {
+  createDetectionProxy,
+  encodeThumbnail,
+  encodeThumbnailFromFile,
+  readHeader,
+  type RawImage,
+} from '@worker/imageIo';
+import { warpQuad } from '@worker/warp';
 
 /** 解析の入力。 */
 export interface AnalyzeRequest {
@@ -97,16 +105,15 @@ export async function analyzeImage(request: AnalyzeRequest): Promise<ImageAnalys
     }
   }
 
-  const detection = await detectCard(proxy, proxy.scaleToOriginal);
+  const detection = await detectCard(proxy, proxy.scaleToOriginal, dpi.effectiveDpi);
 
   if (detection.hasMultipleCandidates) warnings.push('multipleCandidates');
   if (detection.status === 'needsReview' && !detection.hasMultipleCandidates) {
     warnings.push('lowConfidence');
   }
 
-  const thumbnail = await safeThumbnail(request.filePath, ignoreIcc);
-
   if (detection.quad === null) {
+    const thumbnail = await safeThumbnail(request.filePath, ignoreIcc);
     return {
       image: {
         ...baseImage(request),
@@ -131,6 +138,19 @@ export async function analyzeImage(request: AnalyzeRequest): Promise<ImageAnalys
   // 既定の種別（身分証カード）で収まるかを判定する。
   // 利用者が確認画面で種別を変えた場合は、UI 側が同じ関数で再計算する。
   const placement = resolvePlacement(card.sizeMm, 'idCard');
+  // 原寸は展開せず、出力と同じ切り出し枠をプロキシ上で補正する。
+  // 枠超過の場合は券面そのものを表示し、種別変更に必要な範囲を残す。
+  const previewQuad = scaleQuad(
+    placement.fits
+      ? cropQuad(detection.quad, placement.cropSizeMm, dpi.effectiveDpi)
+      : detection.quad,
+    1 / proxy.scaleToOriginal,
+  );
+  const thumbnailBytes = await encodeThumbnail(await cropPreview(proxy, previewQuad));
+  const thumbnail = thumbnailBytes.buffer.slice(
+    thumbnailBytes.byteOffset,
+    thumbnailBytes.byteOffset + thumbnailBytes.byteLength,
+  ) as ArrayBuffer;
 
   return {
     image: {
@@ -148,6 +168,20 @@ export async function analyzeImage(request: AnalyzeRequest): Promise<ImageAnalys
     quad: detection.quad,
     ignoreIcc,
   };
+}
+
+/** プロキシの必要範囲だけをコピーし、出力と共通の透視補正へ渡す。 */
+async function cropPreview(proxy: RawImage, quad: Quad): Promise<RawImage> {
+  const box = boundingBox(quad, proxy, 2);
+  const data = Buffer.alloc(box.width * box.height * 3);
+  for (let y = 0; y < box.height; y += 1) {
+    const start = ((box.y + y) * proxy.width + box.x) * 3;
+    proxy.data.copy(data, y * box.width * 3, start, start + box.width * 3);
+  }
+  return warpQuad(
+    { data, width: box.width, height: box.height, channels: 3 },
+    translateQuad(quad, box),
+  );
 }
 
 /** 解析結果の共通部分。 */

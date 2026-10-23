@@ -284,6 +284,27 @@ body {
   background: var(--error-bg);
 }
 
+.review__preview-cell {
+  width: 132px;
+  min-width: 132px;
+}
+
+.review__preview {
+  width: 108px;
+  height: 76px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+}
+
+.review__preview .thumbnail {
+  width: 108px;
+  height: 76px;
+  max-width: 100%;
+  max-height: 100%;
+}
+
 .review__path {
   font-family: 'Consolas', 'Cascadia Mono', monospace;
   font-size: 12px;

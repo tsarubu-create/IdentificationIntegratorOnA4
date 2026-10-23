@@ -1,6 +1,6 @@
 {
   "name": "identification-integrator-on-a4",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "スキャンした身分証画像を物理サイズを維持したままA4 PNGへ統合するローカル完結デスクトップアプリ",
   "private": true,
   "license": "MIT",

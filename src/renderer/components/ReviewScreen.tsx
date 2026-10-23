@@ -101,16 +101,21 @@ interface ReviewRowProps {
 function ReviewRow({ image, kind, onChangeKind }: ReviewRowProps): React.JSX.Element {
   // 種別を変えると配置サイズと収まり判定が変わるため、選択に追随して再計算する。
   const placement = useMemo(
-    () => (image.physicalSize === null ? null : resolvePlacement(image.physicalSize, kind)),
-    [image.physicalSize, kind],
+    () => (image.cardSizeMm === null ? null : resolvePlacement(image.cardSizeMm, kind)),
+    [image.cardSizeMm, kind],
   );
   const exclusion = useMemo(() => resolveExclusion(image, kind), [image, kind]);
   const isExcluded = exclusion !== null;
 
   return (
     <tr className={isExcluded ? 'review__row review__row--excluded' : 'review__row'}>
-      <td>
-        <Thumbnail data={image.thumbnail} alt={`${image.relativePath} の切り出し結果`} />
+      <td className="review__preview-cell">
+        <div className="review__preview">
+          <Thumbnail
+            data={image.thumbnail}
+            alt={`${image.relativePath} の${image.status === 'failed' ? '元画像' : '検出結果'}`}
+          />
+        </div>
       </td>
       <td className="review__path">{image.relativePath}</td>
       <td>

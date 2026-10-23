@@ -83,7 +83,7 @@ export interface AnalyzedImage {
   readonly effectiveDpi: number;
   /**
    * A4 上へ配置する物理サイズ（券面＋余白）。検出失敗時は null。
-   * レイアウトの収まり判定にはこちらを使う。
+   * 収まり判定には券面そのものの cardSizeMm を使う。
    */
   readonly physicalSize: SizeMm | null;
   /**

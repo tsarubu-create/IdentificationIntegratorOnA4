@@ -13,8 +13,16 @@
  */
 
 import type { CandidateMetrics } from '@core/detect/scoring';
-import { evaluateCandidates } from '@core/detect/scoring';
-import { orderCorners, polygonArea, quadToArray, scaleQuad } from '@core/geometry/quad';
+import { evaluateCandidates, scoreCandidate } from '@core/detect/scoring';
+import {
+  orderCorners,
+  polygonArea,
+  quadToArray,
+  scaleQuad,
+  quadCenter,
+  warpTargetSize,
+} from '@core/geometry/quad';
+import { matchOfficialSize } from '@core/standards/documentSizes';
 import type { DetectionStatus, Point, Quad } from '@shared/types';
 import type { RawImage } from '@worker/imageIo';
 import { type OpenCv, cvConstant, loadOpenCv, withMats } from '@worker/opencv';
@@ -124,10 +132,12 @@ const MAX_CENTER_SHIFT_RATIO = 0.06;
  *
  * @param proxy 長辺 1600px のプロキシ画像（RGB）
  * @param scaleToOriginal 原寸 / プロキシ の倍率
+ * @param effectiveDpi 指定時は規格寸法に一致する候補を優先し、淡い外周も再探索する
  */
 export async function detectCard(
   proxy: RawImage,
   scaleToOriginal: number,
+  effectiveDpi?: number,
 ): Promise<DetectionOutcome> {
   const cv = await loadOpenCv();
 
@@ -141,33 +151,76 @@ export async function detectCard(
     const deltaE = computeDeltaE(lab.data, proxy.width * proxy.height, background);
     const threshold = adaptiveThreshold(deltaE, ringIndices);
 
-    const mask = track(maskFromDeltaE(cv, deltaE, proxy.width, proxy.height, threshold));
-    applyMorphology(cv, mask, track);
-
-    const contours = track(new cv.MatVector());
-    const hierarchy = track(new cv.Mat());
-    cv.findContours(
-      mask,
-      contours,
-      hierarchy,
-      cvConstant(cv.RETR_EXTERNAL, 'RETR_EXTERNAL'),
-      cvConstant(cv.CHAIN_APPROX_SIMPLE, 'CHAIN_APPROX_SIMPLE'),
-    );
-
     const candidates: { metrics: CandidateMetrics; corners: Point[] }[] = [];
     const imageArea = proxy.width * proxy.height;
+    const lowThreshold = Math.max(MIN_REFINE_THRESHOLD, threshold / 2);
+    for (const passThreshold of effectiveDpi === undefined
+      ? [threshold]
+      : [threshold, lowThreshold]) {
+      const mask = track(maskFromDeltaE(cv, deltaE, proxy.width, proxy.height, passThreshold));
+      applyMorphology(cv, mask, track);
 
-    for (let i = 0; i < contours.size(); i += 1) {
-      const contour = contours.get(i);
-      try {
-        const candidate = describeContour(cv, contour, imageArea, proxy.width, proxy.height);
-        if (candidate !== null) candidates.push(candidate);
-      } finally {
-        contour.delete();
+      const contours = track(new cv.MatVector());
+      const hierarchy = track(new cv.Mat());
+      cv.findContours(
+        mask,
+        contours,
+        hierarchy,
+        cvConstant(cv.RETR_EXTERNAL, 'RETR_EXTERNAL'),
+        cvConstant(cv.CHAIN_APPROX_SIMPLE, 'CHAIN_APPROX_SIMPLE'),
+      );
+
+      for (let i = 0; i < contours.size(); i += 1) {
+        const contour = contours.get(i);
+        try {
+          const candidate = describeContour(cv, contour, imageArea, proxy.width, proxy.height);
+          if (candidate !== null && scoreCandidate(candidate.metrics) > 0) {
+            // 低い閾値で増えたノイズは、実寸が規格に一致する場合だけ補完候補にする。
+            if (passThreshold === threshold || matchesSize(candidate.corners))
+              candidates.push(candidate);
+          }
+        } finally {
+          contour.delete();
+        }
       }
     }
 
-    const evaluation = evaluateCandidates(candidates.map((c) => c.metrics));
+    function matchesSize(corners: Point[]): boolean {
+      if (effectiveDpi === undefined) return false;
+      const size = warpTargetSize(scaleQuad(orderCorners(corners), scaleToOriginal));
+      const measured = {
+        widthMm: (size.width / effectiveDpi) * 25.4,
+        heightMm: (size.height / effectiveDpi) * 25.4,
+      };
+      return (
+        matchOfficialSize(measured, 'idCard').matched ||
+        matchOfficialSize(measured, 'passportSpread').matched
+      );
+    }
+
+    const matching = candidates.filter((c) => matchesSize(c.corners));
+    const ranked = (matching.length > 0 ? matching : candidates).sort(
+      (a, b) => scoreCandidate(b.metrics) - scoreCandidate(a.metrics),
+    );
+    // 閾値を変えて得た同じ券面は一候補にまとめる。別の場所のカードは保持する。
+    const distinct = ranked.filter(
+      (candidate, index) =>
+        !ranked.slice(0, index).some((other) => {
+          const a = orderCorners(candidate.corners);
+          const b = orderCorners(other.corners);
+          const ac = quadCenter(a);
+          const bc = quadCenter(b);
+          const as = warpTargetSize(a);
+          const bs = warpTargetSize(b);
+          return (
+            Math.hypot(ac.x - bc.x, ac.y - bc.y) < Math.min(as.height, bs.height) * 0.2 &&
+            Math.abs(as.width / bs.width - 1) < 0.25 &&
+            Math.abs(as.height / bs.height - 1) < 0.25
+          );
+        }),
+    );
+
+    const evaluation = evaluateCandidates(distinct.map((c) => c.metrics));
     if (evaluation.bestIndex === null) {
       return {
         status: 'failed' as const,
@@ -177,7 +230,7 @@ export async function detectCard(
       };
     }
 
-    const best = candidates[evaluation.bestIndex]!;
+    const best = distinct[evaluation.bestIndex]!;
     const coarse = orderCorners(best.corners);
 
     // 淡い縁を取り逃していると中心が偏る。近傍だけを低い閾値で見直して

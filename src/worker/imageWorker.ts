@@ -11,6 +11,7 @@ import { analyzeImage } from '@worker/analyze';
 import { composePages } from '@worker/compose';
 import { readHeader } from '@worker/imageIo';
 import { loadOpenCv } from '@worker/opencv';
+import { editImage } from '@worker/editor';
 
 const port = parentPort;
 if (port === null) {
@@ -32,6 +33,10 @@ port.on('message', (request: WorkerRequest) => {
 });
 
 async function handle(request: WorkerRequest): Promise<void> {
+  if (request.kind === 'edit') {
+    reply({ kind: 'edited', taskId: request.taskId, result: await editImage(request.task) });
+    return;
+  }
   if (request.kind === 'analyze') {
     const analysis = await analyzeImage(request.task);
     // 出力時に外接矩形を画像内へ収めるため、元画像の寸法も返す。

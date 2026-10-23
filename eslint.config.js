@@ -25,7 +25,14 @@ const forbiddenNetworkModules = [
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'dist-electron/**', 'release/**', 'node_modules/**', 'coverage/**'],
+    ignores: [
+      'dist/**',
+      'dist-electron/**',
+      'release/**',
+      'node_modules/**',
+      'coverage/**',
+      '.tmp/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

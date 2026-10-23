@@ -22,9 +22,9 @@ function isKindIndependent(reason: ExclusionReason): boolean {
  */
 export function resolveExclusion(image: AnalyzedImage, kind: DocumentKind): ExclusionReason | null {
   if (image.exclusion !== null && isKindIndependent(image.exclusion)) return image.exclusion;
-  if (image.physicalSize === null) return image.exclusion;
+  if (image.cardSizeMm === null) return image.exclusion;
 
-  return resolvePlacement(image.physicalSize, kind).exclusion;
+  return resolvePlacement(image.cardSizeMm, kind).exclusion;
 }
 
 /** 選択中の種別を反映した、出力対象の件数。 */

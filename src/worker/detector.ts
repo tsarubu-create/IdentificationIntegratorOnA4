@@ -13,8 +13,16 @@
  */
 
 import type { CandidateMetrics } from '@core/detect/scoring';
-import { evaluateCandidates } from '@core/detect/scoring';
-import { orderCorners, polygonArea, quadToArray, scaleQuad } from '@core/geometry/quad';
+import { evaluateCandidates, scoreCandidate } from '@core/detect/scoring';
+import {
+  orderCorners,
+  polygonArea,
+  quadToArray,
+  scaleQuad,
+  quadCenter,
+  warpTargetSize,
+} from '@core/geometry/quad';
+import { matchOfficialSize } from '@core/standards/documentSizes';
 import type { DetectionStatus, Point, Quad } from '@shared/types';
 import type { RawImage } from '@worker/imageIo';
 import { type OpenCv, cvConstant, loadOpenCv, withMats } from '@worker/opencv';
@@ -36,7 +44,8 @@ const BORDER_RING_RATIO = 0.04;
  *
  * 実機のフラットベッドスキャン（300dpi）で背景の ΔE 分布を実測した結果、
  * p50=1.3 / p90=3.1 / p99=5.2 だった。閾値 2〜3 では被覆率が 60% に達して
- * 用紙全体を拾ってしまうため下限は必要だが、**4 で十分**である。
+ * 用紙全体を拾ってしまうため通常パスには下限 4 を設ける。
+ * 背景とほぼ同色の券面は、この閾値では拾えないため浮動小数点の補完パスで扱う。
  *
  * 当初は 12 としていたが、これは実測の背景ノイズの 2 倍以上にあたる過大な値だった。
  * 日本の身分証（運転免許証・マイナンバーカード）は券面がほぼ白く、白い
@@ -111,6 +120,9 @@ const REFINE_SIGMA_MULTIPLIER = 2;
 /** 精密化パスの閾値の下限。本検出の 4 より低く取る。 */
 const MIN_REFINE_THRESHOLD = 2;
 
+/** 平滑化した浮動小数点Labで、淡い外周を調べる最小色差。 */
+const SUPPLEMENTAL_MIN_THRESHOLD = 0.75;
+
 /**
  * 中心補正で許容する移動量（カードの短辺に対する比）。
  *
@@ -124,10 +136,12 @@ const MAX_CENTER_SHIFT_RATIO = 0.06;
  *
  * @param proxy 長辺 1600px のプロキシ画像（RGB）
  * @param scaleToOriginal 原寸 / プロキシ の倍率
+ * @param effectiveDpi 指定時は規格寸法に一致する候補を優先し、淡い外周も再探索する
  */
 export async function detectCard(
   proxy: RawImage,
   scaleToOriginal: number,
+  effectiveDpi?: number,
 ): Promise<DetectionOutcome> {
   const cv = await loadOpenCv();
 
@@ -141,33 +155,161 @@ export async function detectCard(
     const deltaE = computeDeltaE(lab.data, proxy.width * proxy.height, background);
     const threshold = adaptiveThreshold(deltaE, ringIndices);
 
-    const mask = track(maskFromDeltaE(cv, deltaE, proxy.width, proxy.height, threshold));
-    applyMorphology(cv, mask, track);
-
-    const contours = track(new cv.MatVector());
-    const hierarchy = track(new cv.Mat());
-    cv.findContours(
-      mask,
-      contours,
-      hierarchy,
-      cvConstant(cv.RETR_EXTERNAL, 'RETR_EXTERNAL'),
-      cvConstant(cv.CHAIN_APPROX_SIMPLE, 'CHAIN_APPROX_SIMPLE'),
-    );
-
-    const candidates: { metrics: CandidateMetrics; corners: Point[] }[] = [];
+    const candidates: {
+      metrics: CandidateMetrics;
+      corners: Point[];
+      deltaE: Float32Array;
+      ringIndices: Uint32Array;
+      refineCenter: boolean;
+    }[] = [];
     const imageArea = proxy.width * proxy.height;
+    const lowThreshold = Math.max(MIN_REFINE_THRESHOLD, threshold / 2);
+    const passes = [
+      {
+        deltaE,
+        ringIndices,
+        thresholds: effectiveDpi === undefined ? [threshold] : [threshold, lowThreshold],
+        supplemental: false,
+        refineCenter: true,
+      },
+    ];
+    if (effectiveDpi !== undefined) {
+      // 外周全体の暗い帯で閾値が上がらないよう、四辺を独立した背景仮説にする。
+      // 薄い差を調べる前に平滑化し、画素単位のノイズを抑える。
+      const smooth = track(new cv.Mat());
+      const floatSource = track(new cv.Mat());
+      const smoothLab = track(new cv.Mat());
+      source.convertTo(floatSource, cvConstant(cv.CV_32FC3, 'CV_32FC3'), 1 / 255);
+      cv.GaussianBlur(
+        floatSource,
+        smooth,
+        new cv.Size(5, 5),
+        0,
+        0,
+        cvConstant(cv.BORDER_REPLICATE, 'BORDER_REPLICATE'),
+      );
+      cv.cvtColor(smooth, smoothLab, cvConstant(cv.COLOR_RGB2Lab, 'COLOR_RGB2Lab'));
+      // 色が場所により緩やかに変わる背景には、離れた背景色との比較だけでは足りない。
+      // 近傍の両側の差で外周を拾い、内部の印刷は規格寸法照合で落とす。
+      passes.push({
+        deltaE: localEdgeContrast(smoothLab.data32F, proxy.width, proxy.height),
+        ringIndices,
+        thresholds: [SUPPLEMENTAL_MIN_THRESHOLD, 1.25],
+        supplemental: true,
+        refineCenter: false,
+      });
+      const seen = new Set<string>();
+      for (const indices of borderSideIndices(proxy.width, proxy.height)) {
+        const color = estimateBackgroundLab(smoothLab.data32F, proxy.width, proxy.height, indices);
+        const key = `${color.l},${color.a},${color.b}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const difference = computeDeltaE(smoothLab.data32F, imageArea, color);
+        const median = medianOf(difference, indices, (value) => value);
+        const mad = medianOf(difference, indices, (value) => Math.abs(value - median));
+        passes.push({
+          deltaE: difference,
+          ringIndices: indices,
+          thresholds: [
+            ...new Set([
+              Math.max(SUPPLEMENTAL_MIN_THRESHOLD, median + 3 * MAD_TO_SIGMA * mad),
+              SUPPLEMENTAL_MIN_THRESHOLD,
+            ]),
+          ],
+          supplemental: true,
+          refineCenter: true,
+        });
+      }
+    }
+    for (const pass of passes) {
+      for (const passThreshold of pass.thresholds) {
+        // 各パスの大きなマスク・輪郭をその都度解放する。
+        withMats((passTrack) => {
+          const mask = passTrack(
+            maskFromDeltaE(cv, pass.deltaE, proxy.width, proxy.height, passThreshold),
+          );
+          if (pass.refineCenter) applyMorphology(cv, mask, passTrack);
+          else {
+            const kernel = passTrack(
+              cv.getStructuringElement(cvConstant(cv.MORPH_RECT, 'MORPH_RECT'), new cv.Size(9, 9)),
+            );
+            cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+          }
 
-    for (let i = 0; i < contours.size(); i += 1) {
-      const contour = contours.get(i);
-      try {
-        const candidate = describeContour(cv, contour, imageArea, proxy.width, proxy.height);
-        if (candidate !== null) candidates.push(candidate);
-      } finally {
-        contour.delete();
+          const contours = passTrack(new cv.MatVector());
+          const hierarchy = passTrack(new cv.Mat());
+          cv.findContours(
+            mask,
+            contours,
+            hierarchy,
+            pass.refineCenter
+              ? cvConstant(cv.RETR_EXTERNAL, 'RETR_EXTERNAL')
+              : cvConstant(cv.RETR_LIST, 'RETR_LIST'),
+            cvConstant(cv.CHAIN_APPROX_SIMPLE, 'CHAIN_APPROX_SIMPLE'),
+          );
+
+          for (let i = 0; i < contours.size(); i += 1) {
+            const contour = contours.get(i);
+            try {
+              const candidate = describeContour(cv, contour, imageArea, proxy.width, proxy.height);
+              if (candidate !== null && scoreCandidate(candidate.metrics) > 0) {
+                // 低い閾値で増えたノイズは、実寸が規格に一致する場合だけ補完候補にする。
+                if (pass.supplemental && candidate.metrics.edgeTouchCount >= 2) continue;
+                if (
+                  (!pass.supplemental && passThreshold === threshold) ||
+                  matchesSize(candidate.corners)
+                )
+                  candidates.push({
+                    ...candidate,
+                    deltaE: pass.deltaE,
+                    ringIndices: pass.ringIndices,
+                    refineCenter: pass.refineCenter,
+                  });
+              }
+            } finally {
+              contour.delete();
+            }
+          }
+        });
       }
     }
 
-    const evaluation = evaluateCandidates(candidates.map((c) => c.metrics));
+    function matchesSize(corners: Point[]): boolean {
+      if (effectiveDpi === undefined) return false;
+      const size = warpTargetSize(scaleQuad(orderCorners(corners), scaleToOriginal));
+      const measured = {
+        widthMm: (size.width / effectiveDpi) * 25.4,
+        heightMm: (size.height / effectiveDpi) * 25.4,
+      };
+      return (
+        matchOfficialSize(measured, 'idCard').matched ||
+        matchOfficialSize(measured, 'passportSpread').matched
+      );
+    }
+
+    const matching = candidates.filter((c) => matchesSize(c.corners));
+    const ranked = (matching.length > 0 ? matching : candidates).sort(
+      (a, b) => scoreCandidate(b.metrics) - scoreCandidate(a.metrics),
+    );
+    // 閾値を変えて得た同じ券面は一候補にまとめる。別の場所のカードは保持する。
+    const distinct = ranked.filter(
+      (candidate, index) =>
+        !ranked.slice(0, index).some((other) => {
+          const a = orderCorners(candidate.corners);
+          const b = orderCorners(other.corners);
+          const ac = quadCenter(a);
+          const bc = quadCenter(b);
+          const as = warpTargetSize(a);
+          const bs = warpTargetSize(b);
+          return (
+            Math.hypot(ac.x - bc.x, ac.y - bc.y) < Math.min(as.height, bs.height) * 0.2 &&
+            Math.abs(as.width / bs.width - 1) < 0.25 &&
+            Math.abs(as.height / bs.height - 1) < 0.25
+          );
+        }),
+    );
+
+    const evaluation = evaluateCandidates(distinct.map((c) => c.metrics));
     if (evaluation.bestIndex === null) {
       return {
         status: 'failed' as const,
@@ -177,12 +319,14 @@ export async function detectCard(
       };
     }
 
-    const best = candidates[evaluation.bestIndex]!;
+    const best = distinct[evaluation.bestIndex]!;
     const coarse = orderCorners(best.corners);
 
     // 淡い縁を取り逃していると中心が偏る。近傍だけを低い閾値で見直して
     // **中心のずれだけ**を補正する（大きさは規格値、傾きは粗検出のものを使う）。
-    const corrected = correctCenter(cv, deltaE, proxy, ringIndices, coarse, track);
+    const corrected = best.refineCenter
+      ? correctCenter(cv, best.deltaE, proxy, best.ringIndices, coarse, track)
+      : coarse;
 
     return {
       status: evaluation.status,
@@ -191,6 +335,28 @@ export async function detectCard(
       hasMultipleCandidates: evaluation.hasMultipleCandidates,
     };
   });
+}
+
+/** 数画素を隔てた両側の色差。緩やかな照明の変化より、券面境界の変化を強調する。 */
+function localEdgeContrast(lab: Float32Array, width: number, height: number): Float32Array {
+  const result = new Float32Array(width * height);
+  const radius = 3;
+  const difference = (a: number, b: number): number => {
+    const dl = lab[a]! - lab[b]!;
+    const da = lab[a + 1]! - lab[b + 1]!;
+    const db = lab[a + 2]! - lab[b + 2]!;
+    return Math.hypot(dl, da, db);
+  };
+  for (let y = radius; y < height - radius; y += 1) {
+    for (let x = radius; x < width - radius; x += 1) {
+      const index = y * width + x;
+      result[index] = Math.max(
+        difference((index - radius) * 3, (index + radius) * 3),
+        difference((index - radius * width) * 3, (index + radius * width) * 3),
+      );
+    }
+  }
+  return result;
 }
 
 /** RGB の生データから OpenCV の Mat を作る。 */
@@ -203,7 +369,7 @@ function matFromRgb(cv: OpenCv, image: RawImage): InstanceType<OpenCv['Mat']> {
   return mat;
 }
 
-/** Lab 空間の背景色（L, a, b）。OpenCV の 8U 表現のまま保持する。 */
+/** Lab 空間の背景色。8U入力ではOpenCV表現、浮動小数点入力ではL=0〜100の実数値。 */
 interface LabColor {
   readonly l: number;
   readonly a: number;
@@ -241,11 +407,29 @@ export function borderRingIndices(width: number, height: number): Uint32Array {
  * カードの色が背景推定へ混入して検出が崩れるため。
  */
 export function estimateBackgroundLab(
-  labData: Uint8Array,
+  labData: Uint8Array | Float32Array,
   width: number,
   height: number,
+  indices: Uint32Array = borderRingIndices(width, height),
 ): LabColor {
-  const indices = borderRingIndices(width, height);
+  if (indices.length === 0) {
+    return labData instanceof Float32Array ? { l: 100, a: 0, b: 0 } : { l: 255, a: 128, b: 128 };
+  }
+  if (labData instanceof Float32Array) {
+    const medians = [0, 1, 2].map((channel) => {
+      const histogram = new Uint32Array(HISTOGRAM_BUCKETS);
+      const offset = channel === 0 ? 0 : 128;
+      for (const index of indices) {
+        const bucket = Math.min(
+          HISTOGRAM_BUCKETS - 1,
+          Math.max(0, Math.round((labData[index * 3 + channel]! + offset) * HISTOGRAM_RESOLUTION)),
+        );
+        histogram[bucket]! += 1;
+      }
+      return medianFromHistogram(histogram, indices.length) / HISTOGRAM_RESOLUTION - offset;
+    });
+    return { l: medians[0]!, a: medians[1]!, b: medians[2]! };
+  }
   const histograms = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
 
   for (const index of indices) {
@@ -255,13 +439,30 @@ export function estimateBackgroundLab(
     histograms[2]![labData[offset + 2]!]! += 1;
   }
 
-  if (indices.length === 0) return { l: 255, a: 128, b: 128 };
-
   return {
     l: medianFromHistogram(histograms[0]!, indices.length),
     a: medianFromHistogram(histograms[1]!, indices.length),
     b: medianFromHistogram(histograms[2]!, indices.length),
   };
+}
+
+/** 四辺を別々に計測する。隅は隣の辺の影が混ざるため除く。 */
+function borderSideIndices(width: number, height: number): Uint32Array[] {
+  const ring = Math.max(1, Math.round(Math.min(width, height) * BORDER_RING_RATIO));
+  const sides: number[][] = [[], [], [], []];
+  for (let y = ring * 2; y < height - ring * 2; y += 1) {
+    for (let x = 0; x < ring; x += 1) {
+      sides[2]!.push(y * width + x);
+      sides[3]!.push(y * width + width - 1 - x);
+    }
+  }
+  for (let x = ring * 2; x < width - ring * 2; x += 1) {
+    for (let y = 0; y < ring; y += 1) {
+      sides[0]!.push(y * width + x);
+      sides[1]!.push((height - 1 - y) * width + x);
+    }
+  }
+  return sides.filter((side) => side.length > 0).map((side) => Uint32Array.from(side));
 }
 
 /** ヒストグラムから中央値を求める。 */
@@ -280,14 +481,15 @@ function medianFromHistogram(histogram: Uint32Array, total: number): number {
  *
  * OpenCV の 8U Lab は L を 0..255 へ引き伸ばしているため、実際の ΔE 単位へ
  * 戻すには L に 100/255 を掛ける。a, b はオフセット付きだが差を取れば相殺される。
+ * 浮動小数点Labはすでに実数値のため、Lを換算しない。
  */
 export function computeDeltaE(
-  labData: Uint8Array,
+  labData: Uint8Array | Float32Array,
   pixelCount: number,
   background: LabColor,
 ): Float32Array {
   const result = new Float32Array(pixelCount);
-  const lScale = 100 / 255;
+  const lScale = labData instanceof Float32Array ? 1 : 100 / 255;
 
   for (let i = 0; i < pixelCount; i += 1) {
     const offset = i * 3;

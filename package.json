@@ -1,6 +1,6 @@
 {
   "name": "identification-integrator-on-a4",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "スキャンした身分証画像を物理サイズを維持したままA4 PNGへ統合するローカル完結デスクトップアプリ",
   "private": true,
   "license": "MIT",
@@ -20,6 +20,7 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:editor": "npm run build && esbuild scripts/verifyEditor.ts --bundle --platform=node --external:electron --external:sharp --outfile=.tmp/verifyEditor.cjs && electron .tmp/verifyEditor.cjs",
     "package": "npm run build && electron-builder --win nsis portable",
     "verify": "npm run lint && npm run typecheck && npm run test"
   },

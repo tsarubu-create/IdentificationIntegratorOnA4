@@ -16,6 +16,8 @@ const api: RendererApi = {
   chooseOutputRoot: () => ipcRenderer.invoke(IpcChannel.chooseOutputRoot),
   analyze: (payload: AnalyzeRequestPayload) => ipcRenderer.invoke(IpcChannel.analyze, payload),
   compose: (payload: ComposeRequestPayload) => ipcRenderer.invoke(IpcChannel.compose, payload),
+  loadEditor: (payload) => ipcRenderer.invoke(IpcChannel.loadEditor, payload),
+  adjust: (payload) => ipcRenderer.invoke(IpcChannel.adjust, payload),
   cancel: () => ipcRenderer.invoke(IpcChannel.cancel),
   openOutputFolder: () => ipcRenderer.invoke(IpcChannel.openOutputFolder),
 

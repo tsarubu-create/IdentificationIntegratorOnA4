@@ -18,6 +18,7 @@ import {
 } from '@renderer/labels';
 import { Thumbnail } from '@renderer/components/Thumbnail';
 import { resolveExclusion } from '@renderer/includable';
+import { canEditImage, recommendsEditing } from '@core/geometry/manualAdjustment';
 
 interface ReviewScreenProps {
   readonly images: readonly AnalyzedImage[];
@@ -26,6 +27,7 @@ interface ReviewScreenProps {
   readonly onChangeKind: (id: string, kind: DocumentKind) => void;
   readonly onCancel: () => void;
   readonly onStart: () => void;
+  readonly onEditImage: (id: string, kind: DocumentKind) => void;
 }
 
 export function ReviewScreen({
@@ -35,6 +37,7 @@ export function ReviewScreen({
   onChangeKind,
   onCancel,
   onStart,
+  onEditImage,
 }: ReviewScreenProps): React.JSX.Element {
   return (
     <section className="panel panel--wide">
@@ -42,6 +45,9 @@ export function ReviewScreen({
         <p>
           <strong>{images.length}</strong> 件を解析しました。 このうち{' '}
           <strong>{includableCount}</strong> 件が出力対象です。
+        </p>
+        <p className="review__note">
+          サムネイルを押すと切り出し位置を調整できます。要確認の画像は、調整後に出力することをおすすめします。
         </p>
         <p className="review__note">
           出力は「出力開始」を押した後にのみ生成されます。中止した場合、ファイルは一切作成されません。
@@ -68,6 +74,7 @@ export function ReviewScreen({
                 image={image}
                 kind={kinds[image.id] ?? 'idCard'}
                 onChangeKind={onChangeKind}
+                onEditImage={onEditImage}
               />
             ))}
           </tbody>
@@ -96,26 +103,50 @@ interface ReviewRowProps {
   readonly image: AnalyzedImage;
   readonly kind: DocumentKind;
   readonly onChangeKind: (id: string, kind: DocumentKind) => void;
+  readonly onEditImage: (id: string, kind: DocumentKind) => void;
 }
 
-function ReviewRow({ image, kind, onChangeKind }: ReviewRowProps): React.JSX.Element {
+function ReviewRow({ image, kind, onChangeKind, onEditImage }: ReviewRowProps): React.JSX.Element {
   // 種別を変えると配置サイズと収まり判定が変わるため、選択に追随して再計算する。
   const placement = useMemo(
-    () => (image.physicalSize === null ? null : resolvePlacement(image.physicalSize, kind)),
-    [image.physicalSize, kind],
+    () => (image.cardSizeMm === null ? null : resolvePlacement(image.cardSizeMm, kind)),
+    [image.cardSizeMm, kind],
   );
   const exclusion = useMemo(() => resolveExclusion(image, kind), [image, kind]);
   const isExcluded = exclusion !== null;
 
   return (
     <tr className={isExcluded ? 'review__row review__row--excluded' : 'review__row'}>
-      <td>
-        <Thumbnail data={image.thumbnail} alt={`${image.relativePath} の切り出し結果`} />
+      <td className="review__preview-cell">
+        <button
+          type="button"
+          className="review__preview review__edit-button"
+          disabled={!canEditImage(image)}
+          onClick={() => onEditImage(image.id, kind)}
+          aria-label={`${image.relativePath} の切り出し位置を調整`}
+          title="押して切り出し位置を調整"
+        >
+          <Thumbnail
+            data={image.thumbnail}
+            alt={`${image.relativePath} の${image.status === 'failed' ? '元画像' : '検出結果'}`}
+          />
+        </button>
+        {canEditImage(image) && (
+          <button
+            type="button"
+            className="review__edit-link"
+            onClick={() => onEditImage(image.id, kind)}
+          >
+            位置を調整
+          </button>
+        )}
       </td>
       <td className="review__path">{image.relativePath}</td>
       <td>
         <span className={`badge badge--${image.status}`}>
-          {DETECTION_STATUS_LABEL[image.status]}
+          {image.warnings.includes('manualAdjustment')
+            ? '手動調整済み'
+            : DETECTION_STATUS_LABEL[image.status]}
         </span>
       </td>
       <td className="review__dpi">{formatDpi(image.embeddedDpi)}</td>
@@ -136,7 +167,7 @@ function ReviewRow({ image, kind, onChangeKind }: ReviewRowProps): React.JSX.Ele
         <select
           className="select"
           value={kind}
-          disabled={image.physicalSize === null}
+          disabled={image.physicalSize === null && !canEditImage(image)}
           onChange={(event) => onChangeKind(image.id, event.target.value as DocumentKind)}
           aria-label={`${image.relativePath} の書類種別`}
         >
@@ -145,6 +176,11 @@ function ReviewRow({ image, kind, onChangeKind }: ReviewRowProps): React.JSX.Ele
         </select>
       </td>
       <td className="review__reasons">
+        {recommendsEditing(image) && (
+          <div className="reason reason--warn">
+            サムネイルを押して、券面全体が入る位置に調整することをおすすめします。
+          </div>
+        )}
         {image.warnings.map((warning) => (
           <div key={warning} className="reason reason--warn">
             {WARNING_LABEL[warning]}

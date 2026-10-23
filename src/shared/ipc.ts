@@ -11,6 +11,8 @@ import type {
   ComposeResult,
   DocumentKind,
   ProgressUpdate,
+  EditorPreview,
+  ManualAdjustment,
 } from '@shared/types';
 
 /** IPC チャネル名。 */
@@ -20,6 +22,8 @@ export const IpcChannel = {
   chooseOutputRoot: 'dialog:choose-output-root',
   analyze: 'job:analyze',
   compose: 'job:compose',
+  loadEditor: 'job:load-editor',
+  adjust: 'job:adjust',
   cancel: 'job:cancel',
   openOutputFolder: 'shell:open-output-folder',
   /** main -> renderer の一方向通知 */
@@ -51,6 +55,20 @@ export type ComposeResponse =
       readonly message?: string;
     };
 
+export interface EditorRequestPayload {
+  readonly id: string;
+  readonly kind: DocumentKind;
+}
+export interface AdjustRequestPayload extends EditorRequestPayload {
+  readonly adjustment: ManualAdjustment;
+}
+export type EditorResponse =
+  | { readonly ok: true; readonly preview: EditorPreview }
+  | { readonly ok: false; readonly message: string };
+export type AdjustResponse =
+  | { readonly ok: true; readonly image: AnalyzedImage }
+  | { readonly ok: false; readonly message: string };
+
 /** preload が renderer へ公開する API。 */
 export interface RendererApi {
   getSettings(): Promise<AppSettings>;
@@ -58,6 +76,8 @@ export interface RendererApi {
   chooseOutputRoot(): Promise<string | null>;
   analyze(payload: AnalyzeRequestPayload): Promise<AnalyzeResponse>;
   compose(payload: ComposeRequestPayload): Promise<ComposeResponse>;
+  loadEditor(payload: EditorRequestPayload): Promise<EditorResponse>;
+  adjust(payload: AdjustRequestPayload): Promise<AdjustResponse>;
   cancel(): Promise<void>;
   openOutputFolder(): Promise<void>;
   /** 進捗の購読。戻り値を呼ぶと購読を解除する */

@@ -15,6 +15,7 @@ import { ensureOutputDirectory, resolveStartSequence, writePageExclusive } from 
 import { scanImages } from '@core/scan/scanner';
 import { CELL_SIZE_MM, PAGE_SIZE_PX } from '@core/layout/a4';
 import { corruptImageBytes, syntheticBlank, syntheticScan } from '../fixtures/synthetic';
+import { faintScan } from '../fixtures/faintScan';
 
 let root: string;
 let inputDir: string;
@@ -76,6 +77,18 @@ async function toComposeItem(
 }
 
 describe('解析フェーズ（仕様書 §5 / §6 / §8）', () => {
+  it('暗い外周に近い淡い券面を、印刷部分の寸法でなくID-1の全面として解析する', async () => {
+    const filePath = await putImage(
+      'faint.png',
+      await faintScan({ centerX: 635, centerY: 485, uneven: true }),
+    );
+    const analysis = await analyzeImage({ id: 'faint', filePath, relativePath: 'faint.png' });
+    expect(analysis.image.status).toBe('detected');
+    expect(analysis.image.cardSizeMm).toEqual({ widthMm: 85.6, heightMm: 53.98 });
+    expect(analysis.image.warnings).not.toContain('nonStandardSize');
+    expect(analysis.image.exclusion).toBeNull();
+    expect(analysis.image.thumbnail).toBeInstanceOf(ArrayBuffer);
+  });
   it('DPI つきカード画像から物理サイズを算出する', async () => {
     const filePath = await putImage('card.png', await cardScanBytes());
     const analysis = await analyzeImage({ id: '1', filePath, relativePath: 'card.png' });
@@ -120,6 +133,45 @@ describe('解析フェーズ（仕様書 §5 / §6 / §8）', () => {
     expect(analysis.image.thumbnail!.byteLength).toBeGreaterThan(0);
     // 解析でファイルが増えていないこと（一時ファイルを作っていない）。
     expect(await readdir(inputDir)).toEqual(before);
+  });
+
+  it('確認用サムネイルに元画像全体でなく、出力と同じ切り出し領域を表示する', async () => {
+    const filePath = await putImage(
+      'preview.png',
+      await cardScanBytes({
+        canvasWidth: 2480,
+        canvasHeight: 3508,
+        centerX: 1700,
+        centerY: 2400,
+        withInnerPattern: false,
+        cardColor: '#205090',
+        backgroundColor: '#ffffff',
+      }),
+    );
+    const analysis = await analyzeImage({ id: '1', filePath, relativePath: 'preview.png' });
+    const thumbnail = sharp(Buffer.from(analysis.image.thumbnail!));
+    const meta = await thumbnail.metadata();
+    expect(meta.width / meta.height).toBeCloseTo(CELL_SIZE_MM.widthMm / CELL_SIZE_MM.heightMm, 1);
+    const { data, info } = await thumbnail
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const center = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * 3;
+    expect(data[center]).toBeLessThan(80);
+    expect(data[center + 2]).toBeGreaterThan(110);
+    const directory = await ensureOutputDirectory(outputRoot);
+    const item = await toComposeItem(filePath, 'preview.png');
+    const outcome = await composePages([item], { outputDirectory: directory });
+    // サムネイルを出力タイルと同じ大きさへ縮小して画素の差を比較する。
+    const output = await sharp(path.join(directory, outcome.fileNames[0]!))
+      .extract({ left: 118, top: 118, width: 1122, height: 818 })
+      .resize(meta.width, meta.height)
+      .removeAlpha()
+      .raw()
+      .toBuffer();
+    const difference =
+      data.reduce((sum, value, index) => sum + Math.abs(value - output[index]!), 0) / data.length;
+    expect(difference).toBeLessThan(5);
   });
 
   it('検出できない画像は理由付きで除外される（停止しない）', async () => {

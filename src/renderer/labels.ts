@@ -32,6 +32,7 @@ export const EXCLUSION_LABEL: Record<ExclusionReason, string> = {
 
 /** 警告の表示名。 */
 export const WARNING_LABEL: Record<WarningCode, string> = {
+  manualAdjustment: '切り出し位置を手動で調整済み',
   dpiMissing: 'DPI情報なし・300dpiとして配置',
   multipleCandidates: '候補が複数あります',
   lowConfidence: '検出の確からしさが低めです',

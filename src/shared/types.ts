@@ -28,12 +28,29 @@ export type ExclusionReason =
 
 /** 警告コード（除外はしないが利用者へ知らせる事象）。 */
 export type WarningCode =
+  | 'manualAdjustment'
   | 'dpiMissing'
   | 'multipleCandidates'
   | 'lowConfidence'
   | 'iccIgnored'
   /** 実測寸法が規格値（運転免許証・マイナンバーカード・旅券）と一致しない */
   | 'nonStandardSize';
+
+/** 元画像の座標系で指定する、手動の切り出し位置。 */
+export interface ManualAdjustment {
+  readonly centerX: number;
+  readonly centerY: number;
+  readonly angleDegrees: number;
+}
+
+/** 編集画面にだけ渡す、メモリ上の縮小画像と現在位置。 */
+export interface EditorPreview {
+  readonly bytes: ArrayBuffer;
+  readonly sourceWidth: number;
+  readonly sourceHeight: number;
+  readonly effectiveDpi: number;
+  readonly adjustment: ManualAdjustment;
+}
 
 /** 上限超過の詳細。利用者への具体的な対処提示に使う（仕様書 §9）。 */
 export interface LimitViolation {

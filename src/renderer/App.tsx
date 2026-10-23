@@ -19,6 +19,7 @@ import { ReviewScreen } from '@renderer/components/ReviewScreen';
 import { SetupScreen } from '@renderer/components/SetupScreen';
 import { Modal } from '@renderer/components/Modal';
 import { countIncludable } from '@renderer/includable';
+import { CropEditor } from '@renderer/components/CropEditor';
 
 type Phase = 'setup' | 'analyzing' | 'review' | 'composing' | 'result';
 
@@ -34,6 +35,7 @@ export function App(): React.JSX.Element {
   const [progress, setProgress] = useState<ProgressUpdate | null>(null);
   const [result, setResult] = useState<ComposeResult | null>(null);
   const [modal, setModal] = useState<{ title: string; body: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; kind: DocumentKind } | null>(null);
 
   useEffect(() => {
     void window.api.getSettings().then((loaded) => {
@@ -148,6 +150,7 @@ export function App(): React.JSX.Element {
             onChangeKind={(id, kind) => setKinds((current) => ({ ...current, [id]: kind }))}
             onCancel={() => void cancel()}
             onStart={() => void startCompose()}
+            onEditImage={(id, kind) => setEditing({ id, kind })}
           />
         )}
 
@@ -172,6 +175,20 @@ export function App(): React.JSX.Element {
         <Modal title={modal.title} onClose={() => setModal(null)}>
           {modal.body}
         </Modal>
+      )}
+      {phase === 'review' && editing !== null && (
+        <CropEditor
+          id={editing.id}
+          kind={editing.kind}
+          onClose={() => setEditing(null)}
+          onSaved={(image) => {
+            setImages((current) =>
+              current.map((previous) => (previous.id === image.id ? image : previous)),
+            );
+            setKinds((current) => ({ ...current, [image.id]: image.kind }));
+            setEditing(null);
+          }}
+        />
       )}
     </div>
   );

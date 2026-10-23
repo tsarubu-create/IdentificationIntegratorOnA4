@@ -171,7 +171,7 @@ export async function analyzeImage(request: AnalyzeRequest): Promise<ImageAnalys
 }
 
 /** プロキシの必要範囲だけをコピーし、出力と共通の透視補正へ渡す。 */
-async function cropPreview(proxy: RawImage, quad: Quad): Promise<RawImage> {
+export async function cropPreview(proxy: RawImage, quad: Quad): Promise<RawImage> {
   const box = boundingBox(quad, proxy, 2);
   const data = Buffer.alloc(box.width * box.height * 3);
   for (let y = 0; y < box.height; y += 1) {

@@ -15,6 +15,7 @@ import { ensureOutputDirectory, resolveStartSequence, writePageExclusive } from 
 import { scanImages } from '@core/scan/scanner';
 import { CELL_SIZE_MM, PAGE_SIZE_PX } from '@core/layout/a4';
 import { corruptImageBytes, syntheticBlank, syntheticScan } from '../fixtures/synthetic';
+import { faintScan } from '../fixtures/faintScan';
 
 let root: string;
 let inputDir: string;
@@ -76,6 +77,18 @@ async function toComposeItem(
 }
 
 describe('解析フェーズ（仕様書 §5 / §6 / §8）', () => {
+  it('暗い外周に近い淡い券面を、印刷部分の寸法でなくID-1の全面として解析する', async () => {
+    const filePath = await putImage(
+      'faint.png',
+      await faintScan({ centerX: 635, centerY: 485, uneven: true }),
+    );
+    const analysis = await analyzeImage({ id: 'faint', filePath, relativePath: 'faint.png' });
+    expect(analysis.image.status).toBe('detected');
+    expect(analysis.image.cardSizeMm).toEqual({ widthMm: 85.6, heightMm: 53.98 });
+    expect(analysis.image.warnings).not.toContain('nonStandardSize');
+    expect(analysis.image.exclusion).toBeNull();
+    expect(analysis.image.thumbnail).toBeInstanceOf(ArrayBuffer);
+  });
   it('DPI つきカード画像から物理サイズを算出する', async () => {
     const filePath = await putImage('card.png', await cardScanBytes());
     const analysis = await analyzeImage({ id: '1', filePath, relativePath: 'card.png' });

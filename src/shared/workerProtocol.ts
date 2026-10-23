@@ -6,6 +6,18 @@
  */
 
 import type { AnalyzedImage, DocumentKind, ExclusionReason, Quad, SizeMm } from '@shared/types';
+import type { EditorPreview, ManualAdjustment } from '@shared/types';
+
+export interface EditTask {
+  readonly filePath: string;
+  readonly analysis: AnalyzeTaskResult;
+  readonly kind: DocumentKind;
+  readonly adjustment: ManualAdjustment | null;
+}
+export interface EditTaskResult {
+  readonly preview: EditorPreview;
+  readonly updated: AnalyzeTaskResult | null;
+}
 
 /** 解析タスクの入力。 */
 export interface AnalyzeTask {
@@ -55,11 +67,13 @@ export interface ComposeTaskResult {
 
 /** main -> worker。 */
 export type WorkerRequest =
+  | { readonly kind: 'edit'; readonly taskId: number; readonly task: EditTask }
   | { readonly kind: 'analyze'; readonly taskId: number; readonly task: AnalyzeTask }
   | { readonly kind: 'compose'; readonly taskId: number; readonly task: ComposeTask };
 
 /** worker -> main。 */
 export type WorkerResponse =
+  | { readonly kind: 'edited'; readonly taskId: number; readonly result: EditTaskResult }
   | { readonly kind: 'ready' }
   | { readonly kind: 'analyzed'; readonly taskId: number; readonly result: AnalyzeTaskResult }
   | { readonly kind: 'composed'; readonly taskId: number; readonly result: ComposeTaskResult }

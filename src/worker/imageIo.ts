@@ -154,6 +154,15 @@ export function rawToPng(image: RawImage): Promise<Buffer> {
     .toBuffer();
 }
 
+/** 編集中だけメモリに保持する、長辺1600px以下の全体プレビュー。 */
+export function rawToWebp(image: RawImage): Promise<Buffer> {
+  return sharp(image.data, {
+    raw: { width: image.width, height: image.height, channels: toChannels(image.channels) },
+  })
+    .webp({ quality: 85 })
+    .toBuffer();
+}
+
 /**
  * 生 RGB データを、指定した画素サイズの PNG へ変換する。
  *

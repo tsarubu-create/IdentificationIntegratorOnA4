@@ -15,6 +15,7 @@ import { warpQuad, rotate90 } from '@worker/warp';
 import { boundingBox, quadCenter, translateQuad, warpTargetSize } from '@core/geometry/quad';
 import { extractRegion } from '@worker/imageIo';
 import { syntheticBlank, syntheticScan } from '../fixtures/synthetic';
+import { faintScan } from '../fixtures/faintScan';
 
 let workDir: string;
 
@@ -40,6 +41,88 @@ async function detect(filePath: string) {
 }
 
 describe('カード検出（仕様書 §5）', () => {
+  it('淡い券面が離れて2枚ある場合は一枚に決めつけず複数候補を警告する', async () => {
+    const filePath = await writeFixture(
+      'two-faint.png',
+      await faintScan({
+        centerX: 700,
+        centerY: 1000,
+        secondCard: { centerX: 1800, centerY: 2300 },
+      }),
+    );
+    const proxy = await createDetectionProxy(filePath);
+    const result = await detectCard(proxy, proxy.scaleToOriginal, 300);
+    expect(result.status).toBe('needsReview');
+    expect(result.hasMultipleCandidates).toBe(true);
+    const size = warpTargetSize(result.quad!);
+    expect(Math.abs(size.width - 1011)).toBeLessThan(25);
+    expect(Math.abs(size.height - 638)).toBeLessThan(25);
+  });
+  it.each([
+    [635, 485],
+    [680, 520],
+  ])('暗い外周帯に近い位置の淡い券面も検出する（中心%i,%i）', async (centerX, centerY) => {
+    const filePath = await writeFixture(
+      `corner-${centerX}.png`,
+      await faintScan({ centerX, centerY, uneven: true }),
+    );
+    const proxy = await createDetectionProxy(filePath);
+    const result = await detectCard(proxy, proxy.scaleToOriginal, 300);
+    expect(result.quad).not.toBeNull();
+    const size = warpTargetSize(result.quad!);
+    expect(Math.abs(size.width - 1011)).toBeLessThan(25);
+    expect(Math.abs(size.height - 638)).toBeLessThan(25);
+    expect(Math.abs(quadCenter(result.quad!).x - centerX)).toBeLessThan(15);
+    expect(Math.abs(quadCenter(result.quad!).y - centerY)).toBeLessThan(15);
+    expect(result.status).toBe('detected');
+  });
+  it.each([-25, 0, 25])(
+    '外周に暗い帯があっても背景に近い券面全体を検出する（%i度）',
+    async (rotationDeg) => {
+      const filePath = await writeFixture(
+        `faint-border-${rotationDeg}.png`,
+        await faintScan({ rotationDeg }),
+      );
+      const proxy = await createDetectionProxy(filePath);
+      const result = await detectCard(proxy, proxy.scaleToOriginal, 300);
+      expect(result.quad).not.toBeNull();
+      const size = warpTargetSize(result.quad!);
+      expect(Math.abs(size.width - 1011)).toBeLessThan(25);
+      expect(Math.abs(size.height - 638)).toBeLessThan(25);
+      expect(Math.abs(quadCenter(result.quad!).x - 1400)).toBeLessThan(15);
+      expect(Math.abs(quadCenter(result.quad!).y - 1800)).toBeLessThan(15);
+      expect(result.status).toBe('detected');
+    },
+  );
+
+  it('暗い外周帯だけの画像に券面を作り出さない', async () => {
+    const filePath = await writeFixture('border-blank.png', await faintScan({ blank: true }));
+    const proxy = await createDetectionProxy(filePath);
+    expect((await detectCard(proxy, proxy.scaleToOriginal, 300)).quad).toBeNull();
+  });
+
+  it.each([false, true])(
+    '緩やかな背景の濃淡とノイズがあっても券面だけを検出する（券面なし=%s）',
+    async (blank) => {
+      const filePath = await writeFixture(
+        `uneven-${blank}.png`,
+        await faintScan({ blank, uneven: true, rotationDeg: 12 }),
+      );
+      const proxy = await createDetectionProxy(filePath);
+      const result = await detectCard(proxy, proxy.scaleToOriginal, 300);
+      if (blank) {
+        expect(result.quad).toBeNull();
+      } else {
+        expect(result.quad).not.toBeNull();
+        const size = warpTargetSize(result.quad!);
+        expect(Math.abs(size.width - 1011)).toBeLessThan(25);
+        expect(Math.abs(size.height - 638)).toBeLessThan(25);
+        expect(Math.abs(quadCenter(result.quad!).x - 1400)).toBeLessThan(15);
+        expect(Math.abs(quadCenter(result.quad!).y - 1800)).toBeLessThan(15);
+        expect(result.status).toBe('detected');
+      }
+    },
+  );
   it.each([150, 600])('%i dpi の実寸カードを傾けても規格寸法で検出する', async (dpi) => {
     const scale = dpi / 300;
     const filePath = await writeFixture(

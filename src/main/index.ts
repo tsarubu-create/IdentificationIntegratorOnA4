@@ -9,9 +9,19 @@ import path from 'node:path';
 import { cpus } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
-import type { AnalyzeResponse, ComposeRequestPayload, ComposeResponse } from '@shared/ipc';
+import type {
+  AnalyzeResponse,
+  ComposeRequestPayload,
+  ComposeResponse,
+  EditorRequestPayload,
+  AdjustRequestPayload,
+  EditorResponse,
+  AdjustResponse,
+} from '@shared/ipc';
 import { IpcChannel } from '@shared/ipc';
-import type { AppSettings, ProgressUpdate } from '@shared/types';
+import type { AppSettings, ProgressUpdate, ManualAdjustment } from '@shared/types';
+import { canEditImage } from '@core/geometry/manualAdjustment';
+import type { EditTaskResult } from '@shared/workerProtocol';
 import { createFileLogger } from '@core/logging/logger';
 import { ensureOutputDirectory } from '@worker/output';
 import { type AnalyzedState, buildComposeItems, runAnalysis } from '@main/job';
@@ -71,7 +81,75 @@ function createWindow(): void {
   });
 }
 
+async function runEdit(
+  payload: EditorRequestPayload,
+  adjustment: ManualAdjustment | null,
+): Promise<EditTaskResult> {
+  const state = analyzedState;
+  if (
+    !state ||
+    !pool ||
+    !payload ||
+    typeof payload.id !== 'string' ||
+    (payload.kind !== 'idCard' && payload.kind !== 'passportSpread')
+  )
+    throw new Error('編集対象がありません');
+  const analysis = state.results.get(payload.id);
+  if (!analysis || !canEditImage(analysis.image)) throw new Error('この画像は編集できません');
+  const result = await pool.edit({
+    filePath: path.join(state.inputFolder, analysis.image.relativePath),
+    analysis,
+    kind: payload.kind,
+    adjustment,
+  });
+  if (state !== analyzedState)
+    throw new Error('解析結果が変わりました。編集画面を開き直してください');
+  if (result.updated) {
+    const results = new Map(state.results);
+    results.set(payload.id, result.updated);
+    analyzedState = { ...state, results };
+    logger.log({
+      level: 'info',
+      relativePath: analysis.image.relativePath,
+      code: 'manualAdjustmentApplied',
+    });
+    await logger.flush();
+  }
+  return result;
+}
+
 function registerIpcHandlers(): void {
+  ipcMain.handle(
+    IpcChannel.loadEditor,
+    async (_event, payload: EditorRequestPayload): Promise<EditorResponse> => {
+      try {
+        const result = await runEdit(payload, null);
+        return { ok: true, preview: result.preview };
+      } catch (error) {
+        logger.log({ level: 'warn', relativePath: null, code: 'editorPreviewFailed' });
+        return {
+          ok: false,
+          message: error instanceof Error ? error.message : '編集用画像を読み込めませんでした',
+        };
+      }
+    },
+  );
+  ipcMain.handle(
+    IpcChannel.adjust,
+    async (_event, payload: AdjustRequestPayload): Promise<AdjustResponse> => {
+      try {
+        const result = await runEdit(payload, payload.adjustment);
+        if (!result.updated) throw new Error('調整結果がありません');
+        return { ok: true, image: result.updated.image };
+      } catch (error) {
+        logger.log({ level: 'warn', relativePath: null, code: 'manualAdjustmentFailed' });
+        return {
+          ok: false,
+          message: error instanceof Error ? error.message : '切り出し位置を反映できませんでした',
+        };
+      }
+    },
+  );
   ipcMain.handle(IpcChannel.getSettings, () => settings);
 
   ipcMain.handle(IpcChannel.chooseInputFolder, async () => {

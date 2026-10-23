@@ -15,6 +15,8 @@ import type {
   ComposeTaskResult,
   WorkerRequest,
   WorkerResponse,
+  EditTask,
+  EditTaskResult,
 } from '@shared/workerProtocol';
 
 /** 1 件のタスクの待ち行列エントリ。 */
@@ -60,6 +62,10 @@ export class ImageWorkerPool {
   /** プールの並列数。 */
   get size(): number {
     return this.workers.length;
+  }
+
+  edit(task: EditTask): Promise<EditTaskResult> {
+    return this.enqueue<EditTaskResult>((taskId) => ({ kind: 'edit', taskId, task }), MAX_TOTAL_PX);
   }
 
   /** 画像 1 枚を解析する。 */
@@ -182,6 +188,7 @@ export class ImageWorkerPool {
           });
           break;
         case 'composed':
+        case 'edited':
           this.settle(message.taskId, (task) => {
             task.resolve(message.result as never);
           });
